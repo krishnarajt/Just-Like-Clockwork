@@ -70,17 +70,17 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
     <div className="w-full">
       {/* Merge with newer (above) button - shown between cards */}
       {!isFirst && newerLap && (
-        <div className="flex justify-center -my-1.5 relative z-10">
+        <div className="flex justify-center -my-1 relative z-10">
           <button
-            className="btn btn-xs btn-ghost text-base-content/20 hover:text-primary hover:bg-primary/10 gap-1 rounded-full px-3 transition-all duration-200"
+            className="btn btn-xs btn-ghost text-base-content/30 hover:text-primary hover:bg-primary/10 gap-1 rounded-full px-3 transition-all"
             onClick={() => mergeLaps(lap.getId(), newerLap.getId())}
             title="Merge with lap above"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 15l-6-6-6 6"/>
             </svg>
             merge
-            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M6 9l6 6 6-6"/>
             </svg>
           </button>
@@ -88,41 +88,41 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
       )}
 
       {/* The lap card */}
-      <div className={`rounded-2xl border p-4 md:p-5 transition-all duration-200 ${
+      <div className={`rounded-2xl border p-4 md:p-5 transition-all ${
         lap.getIsBreakLap()
           ? 'border-warning/30 bg-warning/5'
-          : 'border-base-300 bg-base-200/30 hover:bg-base-200/50'
+          : 'border-base-300 bg-base-200/30 hover:bg-base-200/60'
       }`}>
         {/* Header row: index, time info, break toggle */}
-        <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
+        <div className="flex items-start justify-between gap-3 mb-3">
           {/* Left: index and day/date */}
           <div className="flex items-center gap-3">
-            <div className="text-2xl font-bold text-primary/80 min-w-[2rem] text-center">
+            <div className="text-2xl font-bold text-primary min-w-[2rem] text-center">
               {displayIndex}
             </div>
             <div className="flex flex-col">
               <span className="text-accent font-medium text-sm">
                 {lap.getStartDayAndDateDict().day}
               </span>
-              <span className="text-base-content/40 text-xs">
+              <span className="text-base-content/50 text-xs">
                 {lap.getStartDayAndDateDict().date}
               </span>
             </div>
           </div>
 
           {/* Center: time info */}
-          <div className="flex items-center gap-4 text-sm flex-wrap">
+          <div className="flex items-center gap-4 text-sm">
             <div className="flex flex-col items-center">
-              <span className="text-base-content/40 text-xs">Start</span>
+              <span className="text-base-content/50 text-xs">Start</span>
               <span className="font-medium">{lap.getStartTimeDateFormatted()}</span>
             </div>
-            <span className="text-base-content/20">→</span>
+            <span className="text-base-content/30">→</span>
             <div className="flex flex-col items-center">
-              <span className="text-base-content/40 text-xs">End</span>
+              <span className="text-base-content/50 text-xs">End</span>
               <span className="font-medium">{lap.getEndTimeDateFormatted()}</span>
             </div>
             <div className="flex flex-col items-center">
-              <span className="text-base-content/40 text-xs">Duration</span>
+              <span className="text-base-content/50 text-xs">Duration</span>
               <span className="font-bold text-secondary tabular-nums">
                 {lap.getCurrentHours()}h {lap.getCurrentMinutes()}m {lap.getCurrentSeconds()}s
               </span>
@@ -132,12 +132,12 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
           {/* Right: break toggle + amount */}
           <div className="flex items-center gap-3">
             {showAmount && (
-              <span className="text-sm font-medium text-accent/80">
+              <span className="text-sm font-medium text-accent">
                 ₹{lap.getAmount().toFixed(2)}
               </span>
             )}
             <label className="flex items-center gap-1.5 cursor-pointer" title="Mark as break">
-              <span className="text-xs text-base-content/40">Break</span>
+              <span className="text-xs text-base-content/50">Break</span>
               <input
                 type="checkbox"
                 className="checkbox checkbox-sm checkbox-warning"
@@ -152,10 +152,10 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
         </div>
 
         {/* Work done textarea with split button overlay */}
-        <div className="relative group/split">
+        <div className="relative">
           <textarea
             ref={textareaRef}
-            className="textarea w-full rounded-xl text-base min-h-[4rem] resize-y bg-base-100/50 border-base-300/50 focus:border-primary/50 focus:outline-none"
+            className="textarea w-full rounded-xl text-base min-h-[4rem] resize-y bg-base-100/50 border-base-300 focus:border-primary"
             placeholder="What did you work on?"
             value={lap.getWorkDoneString()}
             spellCheck={false}
@@ -168,7 +168,7 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
             onPaste={handlePaste}
           />
 
-          {/* Split button - appears as a subtle horizontal line in the middle */}
+          {/* Split button - appears as a subtle horizontal line in the middle on hover */}
           {canSplit && (
             <div
               className="absolute left-2 right-2 top-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none"
@@ -193,25 +193,6 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
         {/* Image attachments */}
         <ImageAttachment lapId={lap.getId()} />
       </div>
-
-      {/* Merge with older (below) button - only show for last card */}
-      {isLast && olderLap && (
-        <div className="flex justify-center -my-1.5 relative z-10">
-          <button
-            className="btn btn-xs btn-ghost text-base-content/20 hover:text-primary hover:bg-primary/10 gap-1 rounded-full px-3 transition-all duration-200"
-            onClick={() => mergeLaps(lap.getId(), olderLap.getId())}
-            title="Merge with lap below"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 15l-6-6-6 6"/>
-            </svg>
-            merge
-            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 9l6 6 6-6"/>
-            </svg>
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -233,7 +214,7 @@ export default function LapCardList({ updateWorkDoneByID }) {
 
   if (laps.length === 0) {
     return (
-      <div className="flex justify-center items-center h-fit gap-16 m-10 border border-base-300 p-6 rounded-2xl min-h-64 text-2xl text-base-content/50 flex-col bg-base-200/20">
+      <div className="flex justify-center items-center h-fit gap-16 m-10 outline p-6 rounded-xl outline-base-content/20 min-h-64 text-2xl text-base-content/50 flex-col">
         <RandomSVGWrapper />
         <div className="flex gap-1 items-center justify-center text-center">
           <div>No Laps Added Yet! Start by clicking</div>
@@ -266,7 +247,7 @@ export default function LapCardList({ updateWorkDoneByID }) {
         {previousLaps.length > 0 && (
           <div className="mt-6">
             <details className="group">
-              <summary className="cursor-pointer text-base-content/40 hover:text-base-content/70 transition-colors text-sm flex items-center gap-2 mb-3 select-none list-none">
+              <summary className="cursor-pointer text-base-content/50 hover:text-base-content transition-colors text-sm flex items-center gap-2 mb-3 select-none">
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   width="16"

@@ -43,7 +43,7 @@ const TimerContinuous = ({ isPlaying, clearTimer, setClearTimer, textClass = 'te
   }, [isPlaying, clearTimer, setClearTimer]);
 
   return (
-    <div className={`${textClass} font-bold text-accent tabular-nums`}>
+    <div className={`${textClass} font-bold text-accent`}>
       {time.hours.toString().padStart(2, '0')}:{time.minutes.toString().padStart(2, '0')}:
       {time.seconds.toString().padStart(2, '0')}
     </div>

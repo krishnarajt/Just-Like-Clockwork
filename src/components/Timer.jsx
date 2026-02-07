@@ -6,6 +6,7 @@ const Timer = ({ lap, isPlaying, clearTimer, setClearTimer, UpdateCurrentWorkLap
   // variable to hold start time
   const [startTime, setStartTime] = useState(Date.parse(lap.getStartTime()));
 
+  // console.log("Timer", lap);
   const [time, setTime] = useState({
     hours: lap.getCurrentHours(),
     minutes: lap.getCurrentMinutes(),
@@ -37,6 +38,14 @@ const Timer = ({ lap, isPlaying, clearTimer, setClearTimer, UpdateCurrentWorkLap
 
           UpdateCurrentWorkLapTime(lap.getId(), hours, minutes, seconds);
 
+          // log everything
+          // console.log("start time", startTime);
+          // console.log("current time", Date.now());
+          // console.log("paused time", pausedTime);
+          // console.log("current lap time", curLapTimeMillisecond);
+          // console.log("hours", hours);
+          // console.log("minutes", minutes);
+          // console.log("seconds", seconds);
           return {
             hours: hours,
             minutes: minutes,
@@ -62,7 +71,7 @@ const Timer = ({ lap, isPlaying, clearTimer, setClearTimer, UpdateCurrentWorkLap
   }, [isPlaying, clearTimer, setClearTimer]);
 
   return (
-    <div className={`${textClass} font-bold tabular-nums`}>
+    <div className={`${textClass} font-bold`}>
       {time.hours.toString().padStart(2, '0')}:{time.minutes.toString().padStart(2, '0')}:
       {time.seconds.toString().padStart(2, '0')}
     </div>
