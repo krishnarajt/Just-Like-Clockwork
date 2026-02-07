@@ -1,4 +1,4 @@
-import { useContext, useCallback, useRef, useState } from 'react';
+import { useContext, useCallback, useRef } from 'react';
 import PropTypes from 'prop-types';
 import { LapContext } from '../context/LapContext';
 import ImageAttachment from './ImageAttachment';
@@ -12,7 +12,6 @@ import { StartButton as StartButtonSVG } from './ui/StartButton';
 function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast }) {
   const { splitLap, mergeLaps, laps, showAmount } = useContext(LapContext);
   const textareaRef = useRef(null);
-  const [splitHovered, setSplitHovered] = useState(false);
 
   // The display index (chronological: oldest = 1)
   // Since laps are stored newest-first, display index = totalLaps - index
@@ -88,7 +87,7 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
       )}
 
       {/* The lap card */}
-      <div className={`rounded-2xl border p-4 md:p-5 transition-all ${
+      <div className={`rounded-2xl border p-5 md:p-6 transition-all ${
         lap.getIsBreakLap()
           ? 'border-warning/30 bg-warning/5'
           : 'border-base-300 bg-base-200/30 hover:bg-base-200/60'
@@ -151,11 +150,11 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
           </div>
         </div>
 
-        {/* Work done textarea with split button overlay */}
-        <div className="relative">
+        {/* Work done textarea + split button on the right side */}
+        <div className="flex gap-2 items-stretch">
           <textarea
             ref={textareaRef}
-            className="textarea w-full rounded-xl text-base min-h-[4rem] resize-y bg-base-100/50 border-base-300 focus:border-primary"
+            className="textarea textarea-bordered w-full rounded-xl text-base min-h-[5rem] resize-y"
             placeholder="What did you work on?"
             value={lap.getWorkDoneString()}
             spellCheck={false}
@@ -168,25 +167,24 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
             onPaste={handlePaste}
           />
 
-          {/* Split button - appears as a subtle horizontal line in the middle on hover */}
-          {canSplit && (
-            <div
-              className="absolute left-2 right-2 top-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none"
-              style={{ opacity: splitHovered ? 1 : 0, transition: 'opacity 0.2s' }}
-            >
-              <div className="border-t border-dashed border-warning/40 flex-1"></div>
-              <span className="text-[10px] text-warning/60 px-2 font-medium">✂ split</span>
-              <div className="border-t border-dashed border-warning/40 flex-1"></div>
-            </div>
-          )}
+          {/* Split button on the right side of textarea */}
           {canSplit && (
             <button
-              className="absolute left-0 right-0 top-[40%] h-[20%] cursor-row-resize pointer-events-auto opacity-0"
-              onMouseEnter={() => setSplitHovered(true)}
-              onMouseLeave={() => setSplitHovered(false)}
+              className="flex items-center justify-center px-1.5 rounded-lg text-base-content/20 hover:text-warning hover:bg-warning/10 transition-all group"
               onClick={() => splitLap(lap.getId())}
               title="Split this lap into two equal halves"
-            />
+            >
+              <div className="flex flex-col items-center gap-0.5">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="3" x2="12" y2="8"/>
+                  <line x1="12" y1="16" x2="12" y2="21"/>
+                </svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                <span className="text-[9px] font-medium writing-mode-vertical hidden group-hover:block">split</span>
+              </div>
+            </button>
           )}
         </div>
 
@@ -214,7 +212,7 @@ export default function LapCardList({ updateWorkDoneByID }) {
 
   if (laps.length === 0) {
     return (
-      <div className="flex justify-center items-center h-fit gap-16 m-10 outline p-6 rounded-xl outline-base-content/20 min-h-64 text-2xl text-base-content/50 flex-col">
+      <div className="flex justify-center items-center h-fit gap-16 m-10 outline p-6 rounded-xl outline-base-300 min-h-64 text-2xl text-base-content/50 flex-col">
         <RandomSVGWrapper />
         <div className="flex gap-1 items-center justify-center text-center">
           <div>No Laps Added Yet! Start by clicking</div>

@@ -10,10 +10,10 @@ export default function Table({ updateWorkDoneByID }) {
   return (
     <div>
       {laps.length > 0 ? (
-        <div className="overflow-x-auto m-6 border border-base-300 rounded-2xl scroll-auto">
+        <div className="overflow-x-auto m-6 outline outline-base-300 rounded-2xl scroll-auto">
           <table className="table table-lg text-xl">
             {/* head */}
-            <thead>
+            <thead className="">
               <tr className="text-2xl">
                 <th className="w-4">ID</th>
                 <th className="w-12">Day</th>
@@ -35,12 +35,15 @@ export default function Table({ updateWorkDoneByID }) {
                     <td className="w-fit text-2xl">{index + 1}</td>
                     <td className="text-2xl">
                       <span className="text-accent">
-                        {lap.getStartDayAndDateDict().day}
+                        {
+                          lap.getStartDayAndDateDict().day
+                        }
                       </span>
                       <br />
                       <span className="text-base-content/50">
                         {lap.getStartDayAndDateDict().date}
                       </span>
+
                     </td>
                     <td className="text-2xl">
                       {lap.getStartTimeDateFormatted()}
@@ -48,7 +51,7 @@ export default function Table({ updateWorkDoneByID }) {
                     <td className="text-2xl">
                       {lap.getEndTimeDateFormatted()}
                     </td>
-                    <td className="text-2xl tabular-nums">
+                    <td className="text-2xl">
                       {lap.getCurrentHours()}h: {lap.getCurrentMinutes()}m:{' '}
                       {lap.getCurrentSeconds()}s
                     </td>
@@ -67,15 +70,19 @@ export default function Table({ updateWorkDoneByID }) {
                       ></textarea>
                     </td>
                     <td className="text-2xl">
-                      <div className="flex justify-start items-center h-full w-full">
+                      <div
+                        className="flex justify-start items-center h-full w-full"
+                      >
                         <input type="checkbox" className="checkbox checkbox-warning"
                           checked={lap.getIsBreakLap()}
                           onChange={(e) => {
+                            // immediately change checked state
                             lap.setIsBreakLap(e.target.checked);
                             updateWorkDoneByID(lap.getId(), lap.getWorkDoneString());
                           }}
                         />
                       </div>
+
                     </td>
                     {showAmount && (
                       <td className="text-2xl"> {'₹ ' + lap.getAmount().toFixed(2)}</td>
@@ -87,7 +94,8 @@ export default function Table({ updateWorkDoneByID }) {
           </table>
         </div>
       ) : (
-        <div className="flex justify-center items-center h-fit gap-16 m-10 border border-base-300 p-6 rounded-2xl min-h-64 text-2xl text-base-content/50 flex-col">
+        // tell user to start adding new laps
+        <div className="flex justify-center items-center h-fit gap-16 m-10 outline p-6 rounded-xl outline-base-300 min-h-64 text-2xl text-base-content/50 flex-col">
           <RandomSVG />
           <div className="flex gap-1 items-center justify-center text-center">
             <div>No Laps Added Yet! Start by clicking</div>
@@ -100,7 +108,7 @@ export default function Table({ updateWorkDoneByID }) {
   );
 }
 
-// props validation
+// props validatino
 Table.propTypes = {
   updateWorkDoneByID: PropTypes.func.isRequired,
 };

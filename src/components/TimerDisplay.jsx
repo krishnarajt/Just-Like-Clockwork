@@ -26,8 +26,8 @@ export default function TimerDisplay({
   return (
     <div>
       {laps.length > 0 ? (
-        <div className={`flex justify-center items-center ${enlarged ? 'min-h-[14rem]' : 'h-48'} gap-16 m-10 flex-wrap`}>
-          <div className={`outline ${containerPadding} rounded-xl pb-2 outline-base-content/20`}>
+        <div className={`flex justify-center items-center ${enlarged ? 'min-h-[14rem]' : 'h-48'}  gap-16 m-10`}>
+          <div className={`outline ${containerPadding} rounded-xl pb-2 outline-base-300`}>
             <Timer
               lap={getLapFromId(lap) ? getLapFromId(lap) : getFirstLap()}
               isPlaying={isPlaying}
@@ -40,7 +40,7 @@ export default function TimerDisplay({
               Lap Time
             </div>
           </div>
-          <div className={`outline ${containerPadding} rounded-xl pb-2 outline-base-content/20`}>
+          <div className={`outline ${containerPadding} rounded-xl pb-2 outline-base-300`}>
             <TimerContinuous
               isPlaying={isPlaying}
               clearTimer={clearTimer}
@@ -53,15 +53,15 @@ export default function TimerDisplay({
           </div>
         </div>
       ) : (
-        <div className="flex justify-center items-center h-48 gap-16 m-10 flex-wrap">
-          <div className="outline p-8 rounded-xl pb-2 outline-base-content/20">
+        <div className="flex justify-center items-center h-48  gap-16 m-10">
+          <div className="outline p-8 rounded-xl pb-2 outline-base-300">
             <div className="text-9xl font-bold">00:00:00</div>
             <div className="flex justify-center items-center text-center text-2xl italic text-secondary">
               Lap Time
             </div>
           </div>
-          <div className="outline p-8 rounded-xl pb-2 outline-base-content/20">
-            <div className="text-9xl font-bold text-secondary">00:00:00</div>
+          <div className="outline p-8 rounded-xl pb-2 outline-base-300">
+            <div className="text-9xl font-bold text-accent">00:00:00</div>
             <div className="flex justify-center items-center text-center text-2xl italic text-secondary">
               Total Time
             </div>
