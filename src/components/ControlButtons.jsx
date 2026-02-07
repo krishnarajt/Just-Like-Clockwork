@@ -8,6 +8,7 @@ import PropTypes from 'prop-types';
 import { useContext } from 'react';
 import { LapContext } from '../context/LapContext';
 import { StartButton } from './ui/StartButton';
+import { saveSession } from '../utils/sessionStore';
 
 export default function ControlButtons({
   setClearLapTimer,
@@ -27,13 +28,13 @@ export default function ControlButtons({
   };
   const { laps, addLap, resetLaps, getLapFromId, updateEndTime } = useContext(LapContext);
 
+  const lapDisabled = !started ||
+    (getLapFromId(lap)?.getCurrentHours() === 0 && getLapFromId(lap)?.getCurrentMinutes() === 0);
+
   return (
     <div className="w-full justify-center flex gap-4">
       <button
-        disabled={
-          !started ||
-          (getLapFromId(lap).getCurrentHours() === 0 && getLapFromId(lap).getCurrentMinutes() === 0)
-        }
+        disabled={lapDisabled}
         onClick={() => {
           updateEndTime(lap, new Date().toLocaleString());
           setIsPlaying(false);
@@ -47,13 +48,9 @@ export default function ControlButtons({
       >
         <LapIcon
           className={`w-24 h-24 ${
-            !(
-              !started ||
-              (getLapFromId(lap).getCurrentHours() === 0 &&
-                getLapFromId(lap).getCurrentMinutes() === 0)
-            )
-              ? 'text-base-500 transition-all duration-300 hover:text-primary hover:scale-90'
-              : 'text-base-500 cursor-not-allowed'
+            !lapDisabled
+              ? 'text-base-content/40 transition-all duration-300 hover:text-primary hover:scale-90'
+              : 'text-base-content/15 cursor-not-allowed'
           }`}
         />
       </button>
@@ -69,16 +66,16 @@ export default function ControlButtons({
           <PauseButton
             className={`w-24 h-24 ${
               started
-                ? 'text-base-500 transition-all duration-300 hover:text-primary'
-                : 'text-base-500 cursor-not-allowed'
+                ? 'text-base-content/40 transition-all duration-300 hover:text-secondary'
+                : 'text-base-content/15 cursor-not-allowed'
             }`}
           />
         ) : (
           <PlayButton
             className={`w-24 h-24 ${
               started
-                ? 'text-base-500 transition-all duration-300 hover:text-primary'
-                : 'text-base-500 cursor-not-allowed'
+                ? 'text-base-content/40 transition-all duration-300 hover:text-primary'
+                : 'text-base-content/15 cursor-not-allowed'
             }`}
           />
         )}
@@ -101,8 +98,13 @@ export default function ControlButtons({
           />
         ) : (
           <StopButton
-            className="w-24 h-24 text-error"
+            className="w-24 h-24 text-error transition-all duration-300 hover:scale-90"
             onClick={() => {
+              // End the current lap and save the session before clearing
+              if (laps.length > 0) {
+                updateEndTime(lap, new Date().toLocaleString());
+                saveSession(laps);
+              }
               setStarted(false);
               setIsPlaying(false);
               setClearTimer(true);

@@ -32,7 +32,7 @@ class WorkLap {
   }
 
   getHourlyAmount() {
-    return this.amount;
+    return this.HourlyAmount;
   }
 
   getStartTime() {
@@ -76,11 +76,16 @@ class WorkLap {
     return totalMinutes.toFixed(2);
   }
 
-  // get total time in Seconds
+  // get total time in Seconds (string, for backward compat)
   getTotalTimeInSeconds() {
     const totalSeconds =
       this.current_hours * 3600 + this.current_minutes * 60 + this.current_seconds;
     return totalSeconds.toFixed(2);
+  }
+
+  // get total time in Seconds as raw integer (for split calculations etc.)
+  getTotalTimeInSecondsRaw() {
+    return this.current_hours * 3600 + this.current_minutes * 60 + this.current_seconds;
   }
 
   getStartTimeDate() {
@@ -92,15 +97,14 @@ class WorkLap {
   }
 
   getStartTimeDateFormatted() {
-    // Get 24-hour time in HHMM
     const time = new Intl.DateTimeFormat('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
-      hour12: true, // Use 12-hour format
-      timeZone: 'Asia/Kolkata', // Ensure consistent formatting regardless of local timezone
+      hour12: true,
+      timeZone: 'Asia/Kolkata',
     })
       .format(this.getStartTimeDate())
-      .toUpperCase(); // "12:30 PM"
+      .toUpperCase();
 
     return time;
   }
@@ -110,15 +114,14 @@ class WorkLap {
       return 'DNF';
     }
 
-    // Get 24-hour time in HHMM
     const time = new Intl.DateTimeFormat('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
-      hour12: true, // Use 12-hour format
-      timeZone: 'Asia/Kolkata', // Ensure consistent formatting regardless of local timezone
+      hour12: true,
+      timeZone: 'Asia/Kolkata',
     })
       .format(this.getEndTimeDate())
-      .toUpperCase(); // "12:30 PM"
+      .toUpperCase();
 
     return time;
   }
@@ -127,12 +130,11 @@ class WorkLap {
     const date = this.getStartTimeDate();
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-    // Get date as "1 Jan 2025"
     const formattedDate = new Intl.DateTimeFormat('en-GB', {
       day: 'numeric',
       month: 'short',
       year: 'numeric',
-    }).format(this.getStartTimeDate()); // "1 Jan 2025"
+    }).format(this.getStartTimeDate());
 
     return {
       day: days[date.getDay()],

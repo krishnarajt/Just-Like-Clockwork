@@ -1,7 +1,5 @@
 // importing basics
 import { useState, useContext, useEffect } from 'react';
-// import { ThemeContext } from '../context/ThemeContext';
-import React from 'react';
 
 // importing contexts
 import { LapContext } from '../context/LapContext';
@@ -10,12 +8,11 @@ import { LapContext } from '../context/LapContext';
 import Footer from '../components/Footer';
 import Statistics from '../components/Statistics';
 import TimerDisplay from '../components/TimerDisplay';
-import Table from '../components/Table';
+import LapCardList from '../components/LapCard';
 import ControlButtons from '../components/ControlButtons';
 
 const Home = () => {
-
-  const { laps, updateWorkDoneByID, showStatsBeforeLaps } = useContext(LapContext);
+  const { laps, updateWorkDoneByID, showStatsBeforeLaps, minimalistMode } = useContext(LapContext);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [started, setStarted] = useState(false);
@@ -24,11 +21,9 @@ const Home = () => {
   const [lap, setLap] = useState(laps.length > 0 ? laps[0].getId() : '');
 
   useEffect(() => {
-    // console.log("laps have changed");
     if (laps.length > 0) {
       setLap(laps[0].getId());
     }
-    // localStorage.clear();
   }, [laps, lap]);
 
   return (
@@ -41,6 +36,7 @@ const Home = () => {
         clearTimer={clearTimer}
         setClearTimer={setClearTimer}
         lap={lap}
+        enlarged={minimalistMode}
       />
 
       {/* Buttons */}
@@ -56,8 +52,12 @@ const Home = () => {
         lap={lap}
         setLap={setLap}
       />
+
       {showStatsBeforeLaps && <Statistics />}
-      <Table laps={laps} updateWorkDoneByID={updateWorkDoneByID} />
+
+      {/* Lap Cards */}
+      <LapCardList updateWorkDoneByID={updateWorkDoneByID} />
+
       {!showStatsBeforeLaps && <Statistics />}
       <Footer />
     </div>

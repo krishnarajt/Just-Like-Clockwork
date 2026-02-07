@@ -3,7 +3,7 @@ import PropTypes from 'prop-types';
 import { useContext } from 'react';
 import { LapContext } from '../context/LapContext';
 
-const TimerContinuous = ({ isPlaying, clearTimer, setClearTimer }) => {
+const TimerContinuous = ({ isPlaying, clearTimer, setClearTimer, textClass = 'text-9xl' }) => {
   const [time, setTime] = useState({
     hours: 0,
     minutes: 0,
@@ -43,7 +43,7 @@ const TimerContinuous = ({ isPlaying, clearTimer, setClearTimer }) => {
   }, [isPlaying, clearTimer, setClearTimer]);
 
   return (
-    <div className="text-9xl font-bold text-accent">
+    <div className={`${textClass} font-bold text-accent tabular-nums`}>
       {time.hours.toString().padStart(2, '0')}:{time.minutes.toString().padStart(2, '0')}:
       {time.seconds.toString().padStart(2, '0')}
     </div>
@@ -54,6 +54,7 @@ TimerContinuous.propTypes = {
   isPlaying: PropTypes.bool.isRequired,
   clearTimer: PropTypes.bool.isRequired,
   setClearTimer: PropTypes.func.isRequired,
+  textClass: PropTypes.string,
 };
 
 export default TimerContinuous;
