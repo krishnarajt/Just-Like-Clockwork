@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 import { getImages } from '../../utils/imageStore';
 
 function downloadPDF(laps, total_amount, total_minutes, total_laps) {
@@ -36,7 +36,7 @@ function downloadPDF(laps, total_amount, total_minutes, total_laps) {
   ]);
 
   // Add the table to the PDF
-  doc.autoTable({
+  autoTable(doc, {
     head: [columns],
     body: rows,
     foot: [[total_laps, 'Total', '', '', total_minutes, '', '', '', total_amount]],

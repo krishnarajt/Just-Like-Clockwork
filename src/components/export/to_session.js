@@ -3,7 +3,7 @@
 
 import { saveAs } from 'file-saver';
 import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 import { escapeCSVField } from '../../utils/csvUtils';
 
 /**
@@ -110,7 +110,7 @@ export function exportSessionPDF(session) {
     lap.HourlyAmount || 0,
   ]);
 
-  doc.autoTable({
+  autoTable(doc, {
     startY: 34,
     head: [columns],
     body: rows,
@@ -230,7 +230,7 @@ export function exportAllSessionsPDF(sessions) {
       lap.HourlyAmount || 0,
     ]);
 
-    doc.autoTable({
+    const tableResult = autoTable(doc, {
       startY: startY + 10,
       head: [columns],
       body: rows,
@@ -239,7 +239,7 @@ export function exportAllSessionsPDF(sessions) {
       margin: { left: 14, right: 14 },
     });
 
-    startY = doc.lastAutoTable.finalY + 12;
+    startY = (tableResult?.finalY ?? doc.lastAutoTable?.finalY ?? startY + 40) + 12;
   });
 
   doc.save('all_sessions.pdf');
