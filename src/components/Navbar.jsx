@@ -219,7 +219,7 @@ export default function Navbar() {
           {/* Sessions */}
           <Link to="/sessions" className="btn btn-neutral text-neutral-content text-xl font-normal">Sessions</Link>
           {/* Settings */}
-          <Link to="/settings" className="btn btn-neutral text-neutral-content text-xl font-normal">Settings</Link>
+          <Link to="/settings" className="btn btn-neutral text-neutral-content text-xl font-normal px-4">Settings</Link>
           {/* Themes */}
           <div className="dropdown dropdown-end" data-choose-theme>
             <div
