@@ -23,7 +23,12 @@ A Lap Timer to record what work is done hourly, and export a report for the same
 ![alt text](image-4.png)
 3. You can save sessions in your browsers Localstorage. I am planning to have a backend for this for storing it more permanently. 
 ![alt text](image-3.png)
+
 4. You can export to CSV, json, pdf. 
+![alt text](image-13.png)
+![alt text](image-14.png)
+![alt text](image-15.png)
+
 5. You can use all of Daisy UI Themes!
 ![alt text](image-7.png)
 ![alt text](image-8.png)
