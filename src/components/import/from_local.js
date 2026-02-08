@@ -15,8 +15,8 @@ function getFromLocalStorage() {
 
   // Convert the plain objects to WorkLap instances
   let laps = lapsPlain.map(
-    (lap) =>
-      new WorkLap(
+    (lap) => {
+      const workLap = new WorkLap(
         lap.startTime,
         lap.endTime,
         lap.current_hours,
@@ -25,7 +25,13 @@ function getFromLocalStorage() {
         lap.workDoneString,
         lap.HourlyAmount,
         lap.id
-      )
+      );
+      // Restore break lap status (was not being persisted before)
+      if (lap.isBreakLap) {
+        workLap.setIsBreakLap(true);
+      }
+      return workLap;
+    }
   );
 
   // console.log("Laps from local storage: ", laps);

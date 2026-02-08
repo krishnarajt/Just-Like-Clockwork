@@ -209,17 +209,17 @@ export default function Navbar() {
                 onClick={handleExportJSON}
               >JSON</a></li>
               <li className="text-md"><a
-                onClick={handleExportBrowser}
+                onClick={handleExportPDF}
               >PDF</a></li>
               <li className="text-md"><a
-                onClick={handleExportPDF}
-              >Text</a></li>
+                onClick={handleExportBrowser}
+              >Browser</a></li>
             </ul>
           </div>
           {/* Sessions */}
           <Link to="/sessions" className="btn btn-neutral text-neutral-content text-xl font-normal">Sessions</Link>
           {/* Settings */}
-          <Link to="/settings" className="btn btn-neutral text-neutral-content text-xl font-normal px-4">Settings</Link>
+          <Link to="/settings" className="btn btn-neutral text-neutral-content text-xl font-normal">Settings</Link>
           {/* Themes */}
           <div className="dropdown dropdown-end" data-choose-theme>
             <div

@@ -1,5 +1,5 @@
 // importing basics
-import { useState, useContext, useEffect } from 'react';
+import { useContext, useEffect } from 'react';
 
 // importing contexts
 import { LapContext } from '../context/LapContext';
@@ -12,19 +12,28 @@ import LapCardList from '../components/LapCard';
 import ControlButtons from '../components/ControlButtons';
 
 const Home = () => {
-  const { laps, updateWorkDoneByID, showStatsBeforeLaps, minimalistMode } = useContext(LapContext);
-
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [started, setStarted] = useState(false);
-  const [clearTimer, setClearTimer] = useState(false);
-  const [clearLapTimer, setClearLapTimer] = useState(false);
-  const [lap, setLap] = useState(laps.length > 0 ? laps[0].getId() : '');
+  const {
+    laps,
+    updateWorkDoneByID,
+    showStatsBeforeLaps,
+    minimalistMode,
+    isPlaying,
+    setIsPlaying,
+    started,
+    setStarted,
+    clearTimer,
+    setClearTimer,
+    clearLapTimer,
+    setClearLapTimer,
+    activeLapId,
+    setActiveLapId,
+  } = useContext(LapContext);
 
   useEffect(() => {
-    if (laps.length > 0) {
-      setLap(laps[0].getId());
+    if (laps.length > 0 && !activeLapId) {
+      setActiveLapId(laps[0].getId());
     }
-  }, [laps, lap]);
+  }, [laps, activeLapId, setActiveLapId]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -35,7 +44,7 @@ const Home = () => {
         setClearLapTimer={setClearLapTimer}
         clearTimer={clearTimer}
         setClearTimer={setClearTimer}
-        lap={lap}
+        lap={activeLapId}
         enlarged={minimalistMode}
       />
 
@@ -49,8 +58,8 @@ const Home = () => {
         setClearTimer={setClearTimer}
         clearLapTimer={clearLapTimer}
         setClearLapTimer={setClearLapTimer}
-        lap={lap}
-        setLap={setLap}
+        lap={activeLapId}
+        setLap={setActiveLapId}
       />
 
       {showStatsBeforeLaps && <Statistics />}

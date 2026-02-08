@@ -15,6 +15,17 @@ export default function ImageAttachment({ lapId }) {
     setImages(getImages(lapId));
   }, [lapId]);
 
+  // Listen for image changes (e.g. from clipboard paste in LapCard)
+  useEffect(() => {
+    const handleImagesChanged = (e) => {
+      if (e.detail?.lapId === lapId) {
+        setImages(getImages(lapId));
+      }
+    };
+    window.addEventListener('clockwork-images-changed', handleImagesChanged);
+    return () => window.removeEventListener('clockwork-images-changed', handleImagesChanged);
+  }, [lapId]);
+
   // Convert file/blob to base64 and store
   const handleImageData = useCallback((file) => {
     if (!file || !file.type.startsWith('image/')) return;

@@ -48,6 +48,8 @@ export function addImage(lapId, base64Image) {
   const images = getImages(lapId);
   images.push(base64Image);
   saveImages(lapId, images);
+  // Notify any listening components (e.g. ImageAttachment) that images changed
+  window.dispatchEvent(new CustomEvent('clockwork-images-changed', { detail: { lapId } }));
 }
 
 /**

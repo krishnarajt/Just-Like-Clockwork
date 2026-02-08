@@ -1,9 +1,17 @@
-@tailwind utilities;
-
 @import 'tailwindcss';
+
+/* Tailwind v4 source detection - ensures all component classes are included in production builds */
+@source "../index.html";
+@source "./App.jsx";
+@source "./main.jsx";
+@source "./components/**/*.jsx";
+@source "./components/**/*.js";
+@source "./pages/*.jsx";
+
 @plugin "daisyui" {
   themes: all;
 }
+
 /* Customize the scrollbar */
 ::-webkit-scrollbar {
   width: 4px;
@@ -22,4 +30,67 @@
 ::-webkit-scrollbar-track {
   background-color: transparent;
   /* Set the track color to transparent */
+}
+
+/* Toast notification styles - inline so they work regardless of Tailwind purging */
+.toast-container {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.toast-message {
+  pointer-events: auto;
+  padding: 0.75rem 1.25rem;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  animation: toast-slide-in 0.3s ease-out, toast-fade-out 0.3s ease-in 2.7s forwards;
+  max-width: 24rem;
+}
+
+.toast-message.toast-info {
+  background-color: oklch(var(--in, 0.7206 0.191 231.6));
+  color: oklch(var(--inc, 0 0 0));
+}
+
+.toast-message.toast-warning {
+  background-color: oklch(var(--wa, 0.8471 0.199 83.87));
+  color: oklch(var(--wac, 0 0 0));
+}
+
+.toast-message.toast-success {
+  background-color: oklch(var(--su, 0.7206 0.191 142.5));
+  color: oklch(var(--suc, 0 0 0));
+}
+
+.toast-message.toast-error {
+  background-color: oklch(var(--er, 0.7206 0.191 22.18));
+  color: oklch(var(--erc, 0 0 0));
+}
+
+@keyframes toast-slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes toast-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }

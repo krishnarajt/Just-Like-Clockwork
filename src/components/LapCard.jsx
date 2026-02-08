@@ -5,6 +5,7 @@ import ImageAttachment from './ImageAttachment';
 import { addImage } from '../utils/imageStore';
 import RandomSVG from './ui/RandomSVG';
 import { StartButton as StartButtonSVG } from './ui/StartButton';
+import { showToast } from '../utils/toast';
 
 /**
  * Single lap displayed as a rounded card with split/merge controls
@@ -63,7 +64,8 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
   const olderLap = index < laps.length - 1 ? laps[index + 1] : null;
 
   const totalSeconds = lap.getTotalTimeInSecondsRaw();
-  const canSplit = totalSeconds >= 2; // Need at least 2 seconds to split
+  const isActiveLap = lap.endTime === 0; // Currently running lap
+  const canSplit = totalSeconds >= 2 && !isActiveLap; // Need at least 2 seconds and not active
 
   return (
     <div className="w-full">
@@ -183,6 +185,24 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
                   <line x1="5" y1="12" x2="19" y2="12"/>
                 </svg>
                 <span className="text-[9px] font-medium writing-mode-vertical hidden group-hover:block">split</span>
+              </div>
+            </button>
+          )}
+          {/* Disabled split button for active/running lap */}
+          {!canSplit && isActiveLap && totalSeconds >= 2 && (
+            <button
+              className="flex items-center justify-center px-1.5 rounded-lg text-base-content/10 cursor-not-allowed transition-all group"
+              onClick={() => showToast('Cannot split the currently running lap. Finish or lap it first.', 'warning')}
+              title="Cannot split: lap is still running"
+            >
+              <div className="flex flex-col items-center gap-0.5">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="3" x2="12" y2="8"/>
+                  <line x1="12" y1="16" x2="12" y2="21"/>
+                </svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
               </div>
             </button>
           )}
