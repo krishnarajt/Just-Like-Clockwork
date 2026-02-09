@@ -39,7 +39,7 @@ const AuthProvider = ({ children }) => {
     }
   }, []);
 
-  // Periodic health check (every 60 seconds)
+  // Periodic health check (every 5 minutes)
   useEffect(() => {
     const doHealthCheck = async () => {
       const healthy = await checkBackendHealth();
@@ -49,7 +49,7 @@ const AuthProvider = ({ children }) => {
     // Initial check
     doHealthCheck();
 
-    healthCheckRef.current = setInterval(doHealthCheck, 60 * 1000);
+    healthCheckRef.current = setInterval(doHealthCheck, 5 * 60 * 1000);
 
     return () => {
       if (healthCheckRef.current) {

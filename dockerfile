@@ -1,21 +1,25 @@
-# get image for node js
-FROM node:latest
+# Stage 1: Build the app
+FROM node:latest AS build
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Copy package.json and package-lock.json to the working directory
+# Copy package files and install dependencies
 COPY package*.json ./
-
-# Install dependencies
-RUN npm install -g vite
 RUN npm install
 
-# Copy the rest of your app's source code from your host to your image filesystem.
+# Copy source and build
 COPY . .
+RUN npm run build
 
-# Expose the port the app runs in
-EXPOSE 5173
+# Stage 2: Serve with nginx (supports SPA fallback routing)
+FROM nginx:alpine
 
-# Serve the app
-CMD ["vite", "--host"]
+# Copy custom nginx config for SPA routing
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Copy built assets from build stage
+COPY --from=build /app/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

@@ -307,7 +307,7 @@ export async function checkBackendHealth() {
 
 /**
  * Push a completed session (from localStorage format) to the backend.
- * This creates a session and adds all laps to it.
+ * This creates a session, adds all laps, and uploads any images.
  * Returns the backend session ID or null on failure.
  */
 export async function syncSessionToBackend(localSession) {
@@ -321,11 +321,12 @@ export async function syncSessionToBackend(localSession) {
 
   try {
     // Step 1: Create session on backend
+    const sessionName = localSession.sessionName || `Session ${new Date(localSession.createdAt).toLocaleDateString()}`;
     const sessionResult = await authRequest('/sessions/', {
       method: 'POST',
       body: JSON.stringify({
-        sessionName: localSession.sessionName || `Session ${new Date(localSession.createdAt).toLocaleDateString()}`,
-        description: `${localSession.lapCount} laps, ${localSession.totalSeconds}s total`,
+        sessionName: sessionName,
+        description: localSession.description || `${localSession.lapCount} laps, ${localSession.totalSeconds}s total`,
         startedAt: localSession.startTime || localSession.createdAt,
       }),
     });
@@ -341,7 +342,7 @@ export async function syncSessionToBackend(localSession) {
     // Step 2: Add laps (in chronological order — reversed since stored newest-first)
     const chronologicalLaps = [...(localSession.laps || [])].reverse();
     for (const lap of chronologicalLaps) {
-      await authRequest(`/sessions/${backendSessionId}/laps`, {
+      const lapResult = await authRequest(`/sessions/${backendSessionId}/laps`, {
         method: 'POST',
         body: JSON.stringify({
           lapName: lap.workDoneString || '',
@@ -349,14 +350,30 @@ export async function syncSessionToBackend(localSession) {
         }),
       });
 
-      // Note: We don't block on lap creation failure
-      // The session itself is created, laps are best-effort
+      // If lap created successfully and has a backend ID, update it with end time & duration
+      if (lapResult && lapResult.id) {
+        const totalSec = (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0);
+        await authRequest(`/sessions/${backendSessionId}/laps/${lapResult.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            lapName: lap.workDoneString || '',
+            endedAt: lap.endTime || null,
+            duration: totalSec,
+          }),
+        });
+
+        // Step 2b: Upload images for this lap (if any exist in localStorage)
+        if (lap.id) {
+          await uploadLocalImagesToBackend(backendSessionId, lapResult.id, lap.id);
+        }
+      }
     }
 
     // Step 3: Mark session as complete with totals
     await authRequest(`/sessions/${backendSessionId}`, {
       method: 'PUT',
       body: JSON.stringify({
+        sessionName: sessionName,
         endedAt: localSession.endTime || new Date().toISOString(),
         totalDuration: localSession.totalSeconds,
         isCompleted: true,
@@ -423,6 +440,7 @@ export async function fetchSettings() {
 
 /**
  * Push settings to backend.
+ * Sends the frontend settings matching the DB model columns.
  * Returns updated settings or null.
  */
 export async function updateSettingsOnBackend(settings) {
@@ -430,6 +448,228 @@ export async function updateSettingsOnBackend(settings) {
     method: 'PUT',
     body: JSON.stringify(settings),
   });
+}
+
+/**
+ * Sync all current frontend settings to the backend.
+ * Reads from localStorage and pushes to backend.
+ */
+export async function syncAllSettingsToBackend() {
+  if (!isLoggedIn()) return null;
+
+  const settings = {
+    showAmount: JSON.parse(localStorage.getItem('showAmount') || 'true'),
+    showStatsBeforeLaps: JSON.parse(localStorage.getItem('showStatsBeforeLaps') || 'false'),
+    breaksImpactAmount: JSON.parse(localStorage.getItem('breaksImpactAmount') || 'false'),
+    breaksImpactTime: JSON.parse(localStorage.getItem('breaksImpactTime') || 'false'),
+    minimalistMode: JSON.parse(localStorage.getItem('minimalistMode') || 'false'),
+    notificationEnabled: JSON.parse(localStorage.getItem('notificationEnabled') || 'true'),
+    notificationIntervalHours: JSON.parse(localStorage.getItem('notificationIntervalHours') || '2'),
+    hourlyAmount: JSON.parse(localStorage.getItem('hourlyAmount') || '450'),
+    // Also send as customSettings for the backend routes that use that field
+    customSettings: {
+      showAmount: JSON.parse(localStorage.getItem('showAmount') || 'true'),
+      showStatsBeforeLaps: JSON.parse(localStorage.getItem('showStatsBeforeLaps') || 'false'),
+      breaksImpactAmount: JSON.parse(localStorage.getItem('breaksImpactAmount') || 'false'),
+      breaksImpactTime: JSON.parse(localStorage.getItem('breaksImpactTime') || 'false'),
+      minimalistMode: JSON.parse(localStorage.getItem('minimalistMode') || 'false'),
+      notificationEnabled: JSON.parse(localStorage.getItem('notificationEnabled') || 'true'),
+      notificationIntervalHours: JSON.parse(localStorage.getItem('notificationIntervalHours') || '2'),
+      hourlyAmount: JSON.parse(localStorage.getItem('hourlyAmount') || '450'),
+    },
+  };
+
+  return await updateSettingsOnBackend(settings);
+}
+
+/**
+ * Load settings from backend and apply to localStorage.
+ */
+export async function loadSettingsFromBackend() {
+  if (!isLoggedIn()) return null;
+
+  const result = await fetchSettings();
+  if (!result) return null;
+
+  // Apply settings to localStorage — check both direct fields and customSettings
+  const settings = result.customSettings || result;
+
+  if (settings.showAmount !== undefined) localStorage.setItem('showAmount', JSON.stringify(settings.showAmount));
+  if (settings.showStatsBeforeLaps !== undefined) localStorage.setItem('showStatsBeforeLaps', JSON.stringify(settings.showStatsBeforeLaps));
+  if (settings.breaksImpactAmount !== undefined) localStorage.setItem('breaksImpactAmount', JSON.stringify(settings.breaksImpactAmount));
+  if (settings.breaksImpactTime !== undefined) localStorage.setItem('breaksImpactTime', JSON.stringify(settings.breaksImpactTime));
+  if (settings.minimalistMode !== undefined) localStorage.setItem('minimalistMode', JSON.stringify(settings.minimalistMode));
+  if (settings.notificationEnabled !== undefined) localStorage.setItem('notificationEnabled', JSON.stringify(settings.notificationEnabled));
+  if (settings.notificationIntervalHours !== undefined) localStorage.setItem('notificationIntervalHours', JSON.stringify(settings.notificationIntervalHours));
+  if (settings.hourlyAmount !== undefined) localStorage.setItem('hourlyAmount', JSON.stringify(settings.hourlyAmount));
+
+  return settings;
+}
+
+// ============ Image Upload ============
+
+/**
+ * Make an authenticated request with file upload (multipart/form-data).
+ * Does NOT set Content-Type — lets the browser set it with boundary.
+ */
+async function authUploadRequest(path, formData) {
+  if (!isLoggedIn()) return null;
+
+  if (isTokenExpiringSoon()) {
+    await refreshAccessToken();
+  }
+
+  const token = getAccessToken();
+  if (!token) return null;
+
+  try {
+    const response = await fetch(`${BASE_URL}${path}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        const newToken = getAccessToken();
+        const retryResponse = await fetch(`${BASE_URL}${path}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${newToken}`,
+          },
+          body: formData,
+        });
+        if (!retryResponse.ok) return null;
+        return await retryResponse.json();
+      }
+      return null;
+    }
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '');
+      console.warn(`[API] Upload failed: ${response.status} ${path}`, errorBody);
+      return null;
+    }
+
+    return await response.json();
+  } catch (err) {
+    console.warn(`[API] Upload network error for ${path}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * Upload a single image (from base64 data URL) to the backend for a specific lap.
+ * Returns the image response or null.
+ */
+export async function uploadImageToBackend(sessionId, lapId, base64DataUrl, filename = 'image.jpg') {
+  if (!isLoggedIn() || !sessionId || !lapId) return null;
+
+  try {
+    // Convert base64 data URL to Blob
+    const response = await fetch(base64DataUrl);
+    const blob = await response.blob();
+
+    // Determine file extension from MIME type
+    const mimeType = blob.type || 'image/jpeg';
+    const ext = mimeType.split('/')[1] || 'jpg';
+    const finalFilename = filename.includes('.') ? filename : `${filename}.${ext}`;
+
+    const formData = new FormData();
+    formData.append('file', blob, finalFilename);
+
+    return await authUploadRequest(`/images/sessions/${sessionId}/laps/${lapId}/upload`, formData);
+  } catch (err) {
+    console.warn('[API] Image upload error:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Upload all localStorage images for a given local lap ID to the backend.
+ * Called during session sync after a backend lap has been created.
+ */
+export async function uploadLocalImagesToBackend(backendSessionId, backendLapId, localLapId) {
+  try {
+    const IMAGE_PREFIX = 'clockwork_img_';
+    const data = localStorage.getItem(IMAGE_PREFIX + localLapId);
+    if (!data) return;
+
+    const images = JSON.parse(data);
+    if (!images || images.length === 0) return;
+
+    console.log(`[Sync] Uploading ${images.length} images for lap ${localLapId}`);
+
+    for (let i = 0; i < images.length; i++) {
+      await uploadImageToBackend(backendSessionId, backendLapId, images[i], `lap_${localLapId}_img_${i}.jpg`);
+      // Small delay between uploads
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  } catch (err) {
+    console.warn('[Sync] Image upload for lap failed:', err.message);
+  }
+}
+
+/**
+ * Fetch images for a specific lap from the backend.
+ * Returns array of image objects with presigned URLs or empty array.
+ */
+export async function fetchLapImages(sessionId, lapId) {
+  if (!isLoggedIn()) return [];
+  const result = await authRequest(`/images/sessions/${sessionId}/laps/${lapId}`);
+  return result || [];
+}
+
+/**
+ * Fetch all images for an entire session from the backend.
+ * Returns array of image objects with presigned URLs or empty array.
+ */
+export async function fetchSessionImages(sessionId) {
+  if (!isLoggedIn()) return [];
+  const result = await authRequest(`/images/sessions/${sessionId}`);
+  return result || [];
+}
+
+/**
+ * Delete an image from the backend by its image UUID.
+ */
+export async function deleteImageFromBackend(imageId) {
+  return await authRequest(`/images/${imageId}`, { method: 'DELETE' });
+}
+
+// ============ Session & Lap Editing ============
+
+/**
+ * Update session metadata (name, description) on the backend.
+ */
+export async function updateSessionOnBackend(sessionId, updates) {
+  return await authRequest(`/sessions/${sessionId}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  });
+}
+
+/**
+ * Update a lap on the backend.
+ * @param {number} sessionId - Backend session ID
+ * @param {number} lapId - Backend lap ID
+ * @param {object} updates - {lapName, endedAt, duration}
+ */
+export async function updateLapOnBackend(sessionId, lapId, updates) {
+  return await authRequest(`/sessions/${sessionId}/laps/${lapId}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  });
+}
+
+/**
+ * Delete a lap from the backend.
+ */
+export async function deleteLapFromBackend(sessionId, lapId) {
+  return await authRequest(`/sessions/${sessionId}/laps/${lapId}`, { method: 'DELETE' });
 }
 
 // ============ Periodic Background Sync ============
@@ -596,6 +836,14 @@ export async function addLapToLiveSession(lap) {
 
   if (result) {
     markLapSyncedToLive(lap.id);
+
+    // Upload images for this lap (non-blocking best-effort)
+    if (result.id && lap.id) {
+      uploadLocalImagesToBackend(backendSessionId, result.id, lap.id).catch(() => {
+        console.warn('[LiveSync] Image upload failed for lap', lap.id);
+      });
+    }
+
     // Update session description with current lap count
     const syncedCount = getLiveSyncedLapIds().length;
     await authRequest(`/sessions/${backendSessionId}`, {
@@ -633,7 +881,7 @@ export async function syncCurrentSessionToBackend(laps) {
   for (const lap of chronologicalLaps) {
     if (syncedLapIds.includes(lap.id)) continue;
 
-    await authRequest(`/sessions/${backendSessionId}/laps`, {
+    const lapResult = await authRequest(`/sessions/${backendSessionId}/laps`, {
       method: 'POST',
       body: JSON.stringify({
         lapName: lap.workDoneString || '',
@@ -645,6 +893,11 @@ export async function syncCurrentSessionToBackend(laps) {
       }),
     });
     markLapSyncedToLive(lap.id);
+
+    // Upload images for this lap if backend lap was created
+    if (lapResult && lapResult.id && lap.id) {
+      await uploadLocalImagesToBackend(backendSessionId, lapResult.id, lap.id);
+    }
   }
 
   // Calculate total seconds so far
@@ -698,6 +951,26 @@ export async function completeLiveSession(laps) {
       description: `${laps.length} laps, ${totalSeconds}s total`,
     }),
   });
+
+  // Upload images: fetch the session detail to get backend lap IDs, then match to local laps
+  try {
+    const detail = await fetchSessionDetail(backendSessionId);
+    if (detail && detail.laps && detail.laps.length > 0) {
+      // Match backend laps to local laps by lap number (chronological order)
+      const chronologicalLocal = [...laps].reverse(); // oldest first
+      const backendLaps = detail.laps; // should already be in lap_number order
+
+      for (let i = 0; i < Math.min(chronologicalLocal.length, backendLaps.length); i++) {
+        const localLap = chronologicalLocal[i];
+        const backendLap = backendLaps[i];
+        if (localLap.id && backendLap.id) {
+          await uploadLocalImagesToBackend(backendSessionId, backendLap.id, localLap.id);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Sync] Image upload during session completion failed:', err.message);
+  }
 
   // Clean up live session state
   clearLiveSessionState();
