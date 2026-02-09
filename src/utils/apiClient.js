@@ -482,8 +482,244 @@ export function stopBackgroundSync() {
 
 // ============ Live Session Sync (save current laps periodically) ============
 
+const LIVE_SESSION_ID_KEY = 'jlc_live_backend_session_id';
+// Track which lap IDs have already been pushed to the backend for the live session
+const LIVE_SESSION_SYNCED_LAPS_KEY = 'jlc_live_synced_lap_ids';
+
 let liveSessionIntervalId = null;
-let currentBackendLiveSessionId = null;
+
+/**
+ * Get the current live backend session ID (if any).
+ */
+export function getLiveBackendSessionId() {
+  return localStorage.getItem(LIVE_SESSION_ID_KEY);
+}
+
+/**
+ * Set the current live backend session ID.
+ */
+export function setLiveBackendSessionId(id) {
+  if (id) {
+    localStorage.setItem(LIVE_SESSION_ID_KEY, id);
+  } else {
+    localStorage.removeItem(LIVE_SESSION_ID_KEY);
+  }
+}
+
+/**
+ * Get the set of lap IDs already synced to the live backend session.
+ */
+export function getLiveSyncedLapIds() {
+  try {
+    const data = localStorage.getItem(LIVE_SESSION_SYNCED_LAPS_KEY);
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Mark a lap ID as synced to the live backend session.
+ */
+export function markLapSyncedToLive(lapId) {
+  const ids = getLiveSyncedLapIds();
+  if (!ids.includes(lapId)) {
+    ids.push(lapId);
+    localStorage.setItem(LIVE_SESSION_SYNCED_LAPS_KEY, JSON.stringify(ids));
+  }
+}
+
+/**
+ * Clear live session tracking state.
+ */
+export function clearLiveSessionState() {
+  localStorage.removeItem(LIVE_SESSION_ID_KEY);
+  localStorage.removeItem(LIVE_SESSION_SYNCED_LAPS_KEY);
+  localStorage.removeItem('jlc_live_session_backup');
+}
+
+/**
+ * Create a new live (in-progress) session on the backend.
+ * Returns the backend session ID or null.
+ */
+export async function createLiveSession(sessionName, startedAt) {
+  if (!isLoggedIn()) return null;
+
+  const result = await authRequest('/sessions/', {
+    method: 'POST',
+    body: JSON.stringify({
+      sessionName: sessionName || `Session ${new Date().toLocaleDateString()}`,
+      description: 'In progress...',
+      startedAt: startedAt || new Date().toISOString(),
+    }),
+  });
+
+  if (result && result.id) {
+    setLiveBackendSessionId(result.id);
+    return result.id;
+  }
+  return null;
+}
+
+/**
+ * Add a completed lap to the live backend session.
+ * Returns true on success.
+ */
+export async function addLapToLiveSession(lap) {
+  if (!isLoggedIn()) return false;
+
+  let backendSessionId = getLiveBackendSessionId();
+
+  // If no live session exists yet, create one
+  if (!backendSessionId) {
+    backendSessionId = await createLiveSession(null, lap.startTime);
+    if (!backendSessionId) return false;
+  }
+
+  // Check if this lap was already synced
+  const syncedLapIds = getLiveSyncedLapIds();
+  if (syncedLapIds.includes(lap.id)) {
+    return true; // Already synced
+  }
+
+  const result = await authRequest(`/sessions/${backendSessionId}/laps`, {
+    method: 'POST',
+    body: JSON.stringify({
+      lapName: lap.workDoneString || '',
+      startedAt: lap.startTime,
+      endedAt: lap.endTime || null,
+      duration: (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0),
+      isBreakLap: lap.isBreakLap || false,
+      hourlyAmount: lap.HourlyAmount || 0,
+    }),
+  });
+
+  if (result) {
+    markLapSyncedToLive(lap.id);
+    // Update session description with current lap count
+    const syncedCount = getLiveSyncedLapIds().length;
+    await authRequest(`/sessions/${backendSessionId}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        description: `${syncedCount} laps synced (in progress)`,
+      }),
+    });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Sync the entire current session state to the backend (for manual sync / browser switch).
+ * Creates the session if needed, adds all unsynced laps.
+ * Returns the backend session ID or null.
+ */
+export async function syncCurrentSessionToBackend(laps) {
+  if (!isLoggedIn() || !laps || laps.length === 0) return null;
+
+  let backendSessionId = getLiveBackendSessionId();
+
+  // Create session if not exists
+  if (!backendSessionId) {
+    const oldestLap = laps[laps.length - 1];
+    backendSessionId = await createLiveSession(null, oldestLap.startTime || oldestLap.startTime);
+    if (!backendSessionId) return null;
+  }
+
+  // Add all unsynced laps (in chronological order — oldest first)
+  const syncedLapIds = getLiveSyncedLapIds();
+  const chronologicalLaps = [...laps].reverse();
+
+  for (const lap of chronologicalLaps) {
+    if (syncedLapIds.includes(lap.id)) continue;
+
+    await authRequest(`/sessions/${backendSessionId}/laps`, {
+      method: 'POST',
+      body: JSON.stringify({
+        lapName: lap.workDoneString || '',
+        startedAt: lap.startTime,
+        endedAt: lap.endTime === 0 ? null : lap.endTime,
+        duration: (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0),
+        isBreakLap: lap.isBreakLap || false,
+        hourlyAmount: lap.HourlyAmount || 0,
+      }),
+    });
+    markLapSyncedToLive(lap.id);
+  }
+
+  // Calculate total seconds so far
+  let totalSeconds = 0;
+  laps.forEach((lap) => {
+    totalSeconds += (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0);
+  });
+
+  // Update session metadata
+  await authRequest(`/sessions/${backendSessionId}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      description: `${laps.length} laps, ${totalSeconds}s total (in progress)`,
+      totalDuration: totalSeconds,
+      isCompleted: false,
+    }),
+  });
+
+  return backendSessionId;
+}
+
+/**
+ * Complete/finalize the live session on the backend.
+ * Called when user stops the timer.
+ * Returns the backend session ID or null.
+ */
+export async function completeLiveSession(laps) {
+  if (!isLoggedIn() || !laps || laps.length === 0) return null;
+
+  // First sync all laps
+  const backendSessionId = await syncCurrentSessionToBackend(laps);
+  if (!backendSessionId) return null;
+
+  // Calculate totals
+  let totalSeconds = 0;
+  let totalAmount = 0;
+  laps.forEach((lap) => {
+    totalSeconds += (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0);
+    if (typeof lap.getAmount === 'function') {
+      totalAmount += lap.getAmount();
+    }
+  });
+
+  // Mark as completed
+  await authRequest(`/sessions/${backendSessionId}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      endedAt: new Date().toISOString(),
+      totalDuration: totalSeconds,
+      isCompleted: true,
+      description: `${laps.length} laps, ${totalSeconds}s total`,
+    }),
+  });
+
+  // Clean up live session state
+  clearLiveSessionState();
+
+  return backendSessionId;
+}
+
+/**
+ * Fetch a single session's detail (with laps) from the backend.
+ * Returns session object or null.
+ */
+export async function fetchSessionDetail(sessionId) {
+  return await authRequest(`/sessions/${sessionId}`);
+}
+
+/**
+ * Fetch laps for a specific session from the backend.
+ * Returns array of laps or null.
+ */
+export async function fetchSessionLaps(sessionId) {
+  return await authRequest(`/sessions/${sessionId}/laps`);
+}
 
 /**
  * Start periodically saving the current live session state to the backend.
@@ -532,5 +768,4 @@ export function stopLiveSessionSync() {
     clearInterval(liveSessionIntervalId);
     liveSessionIntervalId = null;
   }
-  currentBackendLiveSessionId = null;
 }
