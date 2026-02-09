@@ -2,6 +2,7 @@ import { ClockIcon } from './ui/ClockIcon';
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import { LapContext } from '../context/LapContext';
+import { AuthContext } from '../context/AuthContext';
 import React, { useEffect } from 'react';
 
 import uploadCSV from '../components/import/from_csv';
@@ -14,6 +15,7 @@ import exportBrowser from './export/to_local';
 import { ThemeContext } from '../context/ThemeContext';
 import { themeChange } from 'theme-change'
 import { copyCSVToClipboard } from '../utils/csvUtils';
+import { getSyncQueue } from '../utils/apiClient';
 
 const allColumns = [
   "ID",
@@ -84,6 +86,8 @@ export default function Navbar() {
   };
 
   const { theme, setTheme } = React.useContext(ThemeContext);
+  const { user, loggedIn, backendOnline, logout } = React.useContext(AuthContext);
+  const syncQueueCount = getSyncQueue().length;
   useEffect(() => {
     themeChange(false);
   }, []);
@@ -260,6 +264,87 @@ export default function Navbar() {
             </ul>
           </div>
         </ul>
+          {/* Auth */}
+          {loggedIn ? (
+            <div className="dropdown dropdown-end">
+              <div
+                tabIndex={0}
+                role="button"
+                className="btn btn-neutral text-neutral-content text-xl font-normal gap-2"
+              >
+                {/* User icon */}
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+                {user || 'Account'}
+                {/* Backend status dot */}
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    backendOnline === true
+                      ? 'bg-success'
+                      : backendOnline === false
+                      ? 'bg-error'
+                      : 'bg-warning'
+                  }`}
+                  title={
+                    backendOnline === true
+                      ? 'Server online'
+                      : backendOnline === false
+                      ? 'Server offline'
+                      : 'Checking server...'
+                  }
+                />
+              </div>
+              <ul
+                tabIndex={0}
+                className="dropdown-content menu bg-base-100 rounded-box z-[50] w-56 p-3 shadow-lg border border-base-300"
+              >
+                <li className="menu-title text-xs text-base-content/50 px-2 pb-1">
+                  Signed in as <span className="font-semibold text-base-content">{user}</span>
+                </li>
+                <li className="menu-title text-xs px-2 pb-2">
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        backendOnline ? 'bg-success' : 'bg-error'
+                      }`}
+                    />
+                    {backendOnline ? 'Server online' : 'Server offline'}
+                    {syncQueueCount > 0 && (
+                      <span className="text-warning">({syncQueueCount} pending sync)</span>
+                    )}
+                  </span>
+                </li>
+                <div className="divider my-0"></div>
+                <li>
+                  <a
+                    onClick={logout}
+                    className="text-error hover:bg-error/10"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                      <polyline points="16 17 21 12 16 7" />
+                      <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                    Sign Out
+                  </a>
+                </li>
+              </ul>
+            </div>
+          ) : (
+            <Link
+              to="/login"
+              className="btn btn-neutral text-neutral-content text-xl font-normal gap-2"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+                <polyline points="10 17 15 12 10 7" />
+                <line x1="15" y1="12" x2="3" y2="12" />
+              </svg>
+              Login
+            </Link>
+          )}
       </div>
     </div>
   );

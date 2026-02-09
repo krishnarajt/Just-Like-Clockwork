@@ -8,7 +8,8 @@ import PropTypes from 'prop-types';
 import { useContext } from 'react';
 import { LapContext } from '../context/LapContext';
 import { StartButton } from './ui/StartButton';
-import { saveSession } from '../utils/sessionStore';
+import { saveSession, getSessions } from '../utils/sessionStore';
+import { syncSessionToBackend, isLoggedIn, addToSyncQueue, startLiveSessionSync, stopLiveSessionSync } from '../utils/apiClient';
 
 export default function ControlButtons({
   setClearLapTimer,
@@ -98,6 +99,10 @@ export default function ControlButtons({
                 setStarted(true);
                 // setIsPlaying(true);
               }
+              // Start periodic live backup if logged in
+              if (isLoggedIn()) {
+                startLiveSessionSync(() => laps);
+              }
             }}
           />
         ) : (
@@ -107,8 +112,22 @@ export default function ControlButtons({
               // End the current lap and save the session before clearing
               if (laps.length > 0) {
                 updateEndTime(lap, new Date().toLocaleString());
-                saveSession(laps);
+                const sessionId = saveSession(laps);
+
+                // If logged in, attempt to sync to backend (non-blocking)
+                if (isLoggedIn()) {
+                  const sessions = getSessions();
+                  const savedSession = sessions.find((s) => s.id === sessionId);
+                  if (savedSession) {
+                    syncSessionToBackend(savedSession).catch(() => {
+                      // If sync fails, it's already queued for retry
+                      console.log('[Sync] Session queued for later sync');
+                    });
+                  }
+                }
               }
+              // Stop the live session sync
+              stopLiveSessionSync();
               setStarted(false);
               setIsPlaying(false);
               setClearTimer(true);

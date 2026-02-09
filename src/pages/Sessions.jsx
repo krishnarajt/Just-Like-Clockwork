@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useContext } from 'react';
 import { Link } from 'react-router-dom';
 import { getSessions, deleteSession, clearAllSessions } from '../utils/sessionStore';
+import { getSyncedSessionIds, syncSessionToBackend, isLoggedIn } from '../utils/apiClient';
+import { AuthContext } from '../context/AuthContext';
 import {
   exportSessionCSV,
   exportSessionJSON,
@@ -14,6 +16,33 @@ export default function Sessions() {
   const [sessions, setSessions] = useState([]);
   const [expandedSession, setExpandedSession] = useState(null);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
+  const [syncedIds, setSyncedIds] = useState([]);
+  const [syncingId, setSyncingId] = useState(null);
+  const { loggedIn, backendOnline } = useContext(AuthContext);
+
+  useEffect(() => {
+    setSessions(getSessions());
+    setSyncedIds(getSyncedSessionIds());
+  }, []);
+
+  const handleSyncSession = async (session) => {
+    if (!loggedIn || syncingId) return;
+    setSyncingId(session.id);
+    const result = await syncSessionToBackend(session);
+    if (result) {
+      setSyncedIds(getSyncedSessionIds());
+    }
+    setSyncingId(null);
+  };
+
+  const handleSyncAll = async () => {
+    if (!loggedIn) return;
+    for (const session of sessions) {
+      if (!syncedIds.includes(session.id)) {
+        await handleSyncSession(session);
+      }
+    }
+  };
 
   useEffect(() => {
     setSessions(getSessions());
@@ -70,6 +99,28 @@ export default function Sessions() {
           </div>
           {sessions.length > 0 && (
             <div className="flex items-center gap-2">
+              {/* Sync All to backend button (only shown when logged in) */}
+              {loggedIn && (
+                <button
+                  className={`btn btn-sm btn-outline btn-info ${
+                    !backendOnline ? 'btn-disabled' : ''
+                  }`}
+                  onClick={handleSyncAll}
+                  disabled={!backendOnline || syncingId}
+                  title={
+                    !backendOnline
+                      ? 'Server offline'
+                      : 'Sync all unsynced sessions to cloud'
+                  }
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="16 16 12 12 8 16" />
+                    <line x1="12" y1="12" x2="12" y2="21" />
+                    <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" />
+                  </svg>
+                  Sync All
+                </button>
+              )}
               {/* Export All dropdown */}
               <div className="dropdown dropdown-end">
                 <div tabIndex={0} role="button" className="btn btn-sm btn-outline btn-primary">
@@ -160,6 +211,42 @@ export default function Sessions() {
                         </div>
                       )}
                       <div className="flex items-center gap-2">
+                        {/* Sync status indicator */}
+                        {loggedIn && (
+                          syncedIds.includes(session.id) ? (
+                            <span
+                              className="text-success/50"
+                              title="Synced to cloud"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                                <polyline points="22 4 12 14.01 9 11.01" />
+                              </svg>
+                            </span>
+                          ) : (
+                            <button
+                              className={`btn btn-ghost btn-sm btn-circle text-info/50 hover:text-info ${
+                                syncingId === session.id ? 'loading' : ''
+                              }`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSyncSession(session);
+                              }}
+                              disabled={!backendOnline || syncingId}
+                              title="Sync to cloud"
+                            >
+                              {syncingId === session.id ? (
+                                <span className="loading loading-spinner loading-xs"></span>
+                              ) : (
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="16 16 12 12 8 16" />
+                                  <line x1="12" y1="12" x2="12" y2="21" />
+                                  <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" />
+                                </svg>
+                              )}
+                            </button>
+                          )
+                        )}
                         {/* Per-session export dropdown */}
                         <div className="dropdown dropdown-end" onClick={(e) => e.stopPropagation()}>
                           <div tabIndex={0} role="button" className="btn btn-ghost btn-sm btn-circle text-primary/50 hover:text-primary" title="Export this session">
