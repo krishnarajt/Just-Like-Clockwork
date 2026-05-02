@@ -2,6 +2,9 @@
 // Handles all backend communication with graceful degradation
 // If the backend is down, all methods return null and log warnings — never throw or block UI
 
+import { v4 as uuidv4 } from 'uuid';
+import { calculateSessionTotals, getDefaultSessionName, serializeLaps } from './sessionStore';
+
 const BASE_URL = 'https://just-like-clockwork-backend.krishnarajthadesar.in/api';
 
 // localStorage keys for auth tokens
@@ -11,6 +14,8 @@ const USERNAME_KEY = 'jlc_username';
 const TOKEN_EXPIRY_KEY = 'jlc_token_expiry'; // epoch ms when access token expires
 const SYNC_QUEUE_KEY = 'jlc_sync_queue'; // sessions queued for sync when backend was down
 const SYNCED_SESSIONS_KEY = 'jlc_synced_session_ids'; // set of local session IDs already synced
+const SYNCED_SESSION_MAP_KEY = 'jlc_synced_session_map'; // local session UUID -> backend DB id
+const UPLOADED_IMAGES_KEY = 'jlc_uploaded_image_fingerprints'; // local lap ID -> image fingerprints
 
 // ============ Token Management ============
 
@@ -66,15 +71,16 @@ export function getSyncQueue() {
 
 export function addToSyncQueue(session) {
   const queue = getSyncQueue();
+  const sessionUuid = session.sessionUuid || session.id;
   // Avoid duplicates by session id
-  if (!queue.find((s) => s.id === session.id)) {
+  if (!queue.find((s) => (s.sessionUuid || s.id) === sessionUuid)) {
     queue.push(session);
     localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue));
   }
 }
 
 export function removeFromSyncQueue(sessionId) {
-  const queue = getSyncQueue().filter((s) => s.id !== sessionId);
+  const queue = getSyncQueue().filter((s) => s.id !== sessionId && s.sessionUuid !== sessionId);
   localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue));
 }
 
@@ -93,11 +99,67 @@ export function getSyncedSessionIds() {
   }
 }
 
-export function markSessionSynced(localSessionId) {
+export function getSyncedSessionMap() {
+  try {
+    const data = localStorage.getItem(SYNCED_SESSION_MAP_KEY);
+    return data ? JSON.parse(data) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getBackendSessionIdForLocal(localSessionId) {
+  const map = getSyncedSessionMap();
+  return map[localSessionId] || null;
+}
+
+export function markSessionSynced(localSessionId, backendSessionId = null) {
   const ids = getSyncedSessionIds();
   if (!ids.includes(localSessionId)) {
     ids.push(localSessionId);
     localStorage.setItem(SYNCED_SESSIONS_KEY, JSON.stringify(ids));
+  }
+  if (backendSessionId) {
+    const map = getSyncedSessionMap();
+    map[localSessionId] = backendSessionId;
+    localStorage.setItem(SYNCED_SESSION_MAP_KEY, JSON.stringify(map));
+  }
+}
+
+export function unmarkSessionSynced(localSessionId) {
+  const ids = getSyncedSessionIds().filter((id) => id !== localSessionId);
+  localStorage.setItem(SYNCED_SESSIONS_KEY, JSON.stringify(ids));
+  const map = getSyncedSessionMap();
+  delete map[localSessionId];
+  localStorage.setItem(SYNCED_SESSION_MAP_KEY, JSON.stringify(map));
+}
+
+function getUploadedImageMap() {
+  try {
+    const data = localStorage.getItem(UPLOADED_IMAGES_KEY);
+    return data ? JSON.parse(data) : {};
+  } catch {
+    return {};
+  }
+}
+
+function getLocalImageFingerprint(dataUrl) {
+  if (!dataUrl) return '';
+  return `${dataUrl.length}:${dataUrl.slice(0, 96)}:${dataUrl.slice(-96)}`;
+}
+
+function hasUploadedLocalImage(localLapId, fingerprint) {
+  const map = getUploadedImageMap();
+  return Boolean(map[localLapId]?.includes(fingerprint));
+}
+
+function markLocalImageUploaded(localLapId, fingerprint) {
+  const map = getUploadedImageMap();
+  const fingerprints = map[localLapId] || [];
+  if (!fingerprints.includes(fingerprint)) {
+    fingerprints.push(fingerprint);
+    map[localLapId] = fingerprints;
+    localStorage.setItem(UPLOADED_IMAGES_KEY, JSON.stringify(map));
   }
 }
 
@@ -311,23 +373,26 @@ export async function checkBackendHealth() {
  * Returns the backend session ID or null on failure.
  */
 export async function syncSessionToBackend(localSession) {
-  if (!isLoggedIn()) return null;
-
-  // Check if already synced
-  const syncedIds = getSyncedSessionIds();
-  if (syncedIds.includes(localSession.id)) {
-    return 'already_synced';
-  }
+  if (!isLoggedIn() || !localSession) return null;
 
   try {
-    // Step 1: Create session on backend
-    const sessionName = localSession.sessionName || `Session ${new Date(localSession.createdAt).toLocaleDateString()}`;
+    const sessionUuid = localSession.sessionUuid || localSession.id;
+    const laps = Array.isArray(localSession.laps) ? localSession.laps : [];
+    const totals = calculateSessionTotals(laps);
+    const sessionName = localSession.sessionName || getDefaultSessionName(localSession.createdAt);
+    const description = localSession.description || `${laps.length} laps, ${totals.totalSeconds}s total`;
+
     const sessionResult = await authRequest('/sessions/', {
       method: 'POST',
       body: JSON.stringify({
-        sessionName: sessionName,
-        description: localSession.description || `${localSession.lapCount} laps, ${localSession.totalSeconds}s total`,
+        sessionUuid,
+        sessionName,
+        description,
         startedAt: localSession.startTime || localSession.createdAt,
+        endedAt: localSession.endTime || new Date().toISOString(),
+        totalDuration: localSession.totalSeconds ?? totals.totalSeconds,
+        totalAmount: localSession.totalAmount ?? totals.totalAmount,
+        isCompleted: localSession.isCompleted ?? true,
       }),
     });
 
@@ -339,50 +404,50 @@ export async function syncSessionToBackend(localSession) {
 
     const backendSessionId = sessionResult.id;
 
-    // Step 2: Add laps (in chronological order — reversed since stored newest-first)
-    const chronologicalLaps = [...(localSession.laps || [])].reverse();
+    // Add laps in chronological order. lapUuid makes the operation safe to retry.
+    const chronologicalLaps = [...laps].reverse();
     for (const lap of chronologicalLaps) {
+      const totalSec = (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0);
       const lapResult = await authRequest(`/sessions/${backendSessionId}/laps`, {
         method: 'POST',
         body: JSON.stringify({
+          lapUuid: lap.id,
           lapName: lap.workDoneString || '',
+          workDoneString: lap.workDoneString || '',
           startedAt: lap.startTime,
+          endedAt: lap.endTime === 0 ? null : lap.endTime,
+          duration: totalSec,
+          current_hours: lap.current_hours || 0,
+          current_minutes: lap.current_minutes || 0,
+          current_seconds: lap.current_seconds || 0,
+          isBreakLap: lap.isBreakLap || false,
+          hourlyAmount: lap.HourlyAmount || 0,
         }),
       });
 
-      // If lap created successfully and has a backend ID, update it with end time & duration
       if (lapResult && lapResult.id) {
-        const totalSec = (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0);
-        await authRequest(`/sessions/${backendSessionId}/laps/${lapResult.id}`, {
-          method: 'PUT',
-          body: JSON.stringify({
-            lapName: lap.workDoneString || '',
-            endedAt: lap.endTime || null,
-            duration: totalSec,
-          }),
-        });
-
-        // Step 2b: Upload images for this lap (if any exist in localStorage)
         if (lap.id) {
           await uploadLocalImagesToBackend(backendSessionId, lapResult.id, lap.id);
         }
+      } else {
+        throw new Error(`Failed to sync lap ${lap.id || '(missing id)'}`);
       }
     }
 
-    // Step 3: Mark session as complete with totals
     await authRequest(`/sessions/${backendSessionId}`, {
       method: 'PUT',
       body: JSON.stringify({
-        sessionName: sessionName,
+        sessionName,
+        description,
         endedAt: localSession.endTime || new Date().toISOString(),
-        totalDuration: localSession.totalSeconds,
-        isCompleted: true,
+        totalDuration: localSession.totalSeconds ?? totals.totalSeconds,
+        totalAmount: localSession.totalAmount ?? totals.totalAmount,
+        isCompleted: localSession.isCompleted ?? true,
       }),
     });
 
-    // Mark as synced locally
-    markSessionSynced(localSession.id);
-    removeFromSyncQueue(localSession.id);
+    markSessionSynced(sessionUuid, backendSessionId);
+    removeFromSyncQueue(sessionUuid);
 
     return backendSessionId;
   } catch (err) {
@@ -604,7 +669,13 @@ export async function uploadLocalImagesToBackend(backendSessionId, backendLapId,
     console.log(`[Sync] Uploading ${images.length} images for lap ${localLapId}`);
 
     for (let i = 0; i < images.length; i++) {
-      await uploadImageToBackend(backendSessionId, backendLapId, images[i], `lap_${localLapId}_img_${i}.jpg`);
+      const fingerprint = getLocalImageFingerprint(images[i]);
+      if (hasUploadedLocalImage(localLapId, fingerprint)) continue;
+
+      const result = await uploadImageToBackend(backendSessionId, backendLapId, images[i], `lap_${localLapId}_img_${i}.jpg`);
+      if (result && result.imageId) {
+        markLocalImageUploaded(localLapId, fingerprint);
+      }
       // Small delay between uploads
       await new Promise((r) => setTimeout(r, 200));
     }
@@ -723,6 +794,7 @@ export function stopBackgroundSync() {
 // ============ Live Session Sync (save current laps periodically) ============
 
 const LIVE_SESSION_ID_KEY = 'jlc_live_backend_session_id';
+const LIVE_SESSION_UUID_KEY = 'jlc_live_session_uuid';
 // Track which lap IDs have already been pushed to the backend for the live session
 const LIVE_SESSION_SYNCED_LAPS_KEY = 'jlc_live_synced_lap_ids';
 
@@ -744,6 +816,27 @@ export function setLiveBackendSessionId(id) {
   } else {
     localStorage.removeItem(LIVE_SESSION_ID_KEY);
   }
+}
+
+export function getLiveSessionUuid() {
+  return localStorage.getItem(LIVE_SESSION_UUID_KEY);
+}
+
+export function setLiveSessionUuid(sessionUuid) {
+  if (sessionUuid) {
+    localStorage.setItem(LIVE_SESSION_UUID_KEY, sessionUuid);
+  } else {
+    localStorage.removeItem(LIVE_SESSION_UUID_KEY);
+  }
+}
+
+export function ensureLiveSessionUuid(preferredUuid = null) {
+  const existing = getLiveSessionUuid();
+  const sessionUuid = preferredUuid || existing || uuidv4();
+  if (sessionUuid !== existing) {
+    setLiveSessionUuid(sessionUuid);
+  }
+  return sessionUuid;
 }
 
 /**
@@ -774,6 +867,7 @@ export function markLapSyncedToLive(lapId) {
  */
 export function clearLiveSessionState() {
   localStorage.removeItem(LIVE_SESSION_ID_KEY);
+  localStorage.removeItem(LIVE_SESSION_UUID_KEY);
   localStorage.removeItem(LIVE_SESSION_SYNCED_LAPS_KEY);
   localStorage.removeItem('jlc_live_session_backup');
 }
@@ -782,15 +876,18 @@ export function clearLiveSessionState() {
  * Create a new live (in-progress) session on the backend.
  * Returns the backend session ID or null.
  */
-export async function createLiveSession(sessionName, startedAt) {
+export async function createLiveSession(sessionName, startedAt, preferredSessionUuid = null) {
   if (!isLoggedIn()) return null;
 
+  const sessionUuid = ensureLiveSessionUuid(preferredSessionUuid);
   const result = await authRequest('/sessions/', {
     method: 'POST',
     body: JSON.stringify({
-      sessionName: sessionName || `Session ${new Date().toLocaleDateString()}`,
+      sessionUuid,
+      sessionName: sessionName || getDefaultSessionName(startedAt || new Date().toISOString()),
       description: 'In progress...',
       startedAt: startedAt || new Date().toISOString(),
+      isCompleted: false,
     }),
   });
 
@@ -825,10 +922,15 @@ export async function addLapToLiveSession(lap) {
   const result = await authRequest(`/sessions/${backendSessionId}/laps`, {
     method: 'POST',
     body: JSON.stringify({
+      lapUuid: lap.id,
       lapName: lap.workDoneString || '',
+      workDoneString: lap.workDoneString || '',
       startedAt: lap.startTime,
-      endedAt: lap.endTime || null,
+      endedAt: lap.endTime === 0 ? null : lap.endTime,
       duration: (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0),
+      current_hours: lap.current_hours || 0,
+      current_minutes: lap.current_minutes || 0,
+      current_seconds: lap.current_seconds || 0,
       isBreakLap: lap.isBreakLap || false,
       hourlyAmount: lap.HourlyAmount || 0,
     }),
@@ -862,15 +964,16 @@ export async function addLapToLiveSession(lap) {
  * Creates the session if needed, adds all unsynced laps.
  * Returns the backend session ID or null.
  */
-export async function syncCurrentSessionToBackend(laps) {
+export async function syncCurrentSessionToBackend(laps, options = {}) {
   if (!isLoggedIn() || !laps || laps.length === 0) return null;
 
   let backendSessionId = getLiveBackendSessionId();
+  const sessionUuid = ensureLiveSessionUuid(options.sessionUuid || options.localSessionId || null);
 
   // Create session if not exists
   if (!backendSessionId) {
     const oldestLap = laps[laps.length - 1];
-    backendSessionId = await createLiveSession(null, oldestLap.startTime || oldestLap.startTime);
+    backendSessionId = await createLiveSession(options.sessionName || null, oldestLap.startTime, sessionUuid);
     if (!backendSessionId) return null;
   }
 
@@ -884,34 +987,37 @@ export async function syncCurrentSessionToBackend(laps) {
     const lapResult = await authRequest(`/sessions/${backendSessionId}/laps`, {
       method: 'POST',
       body: JSON.stringify({
+        lapUuid: lap.id,
         lapName: lap.workDoneString || '',
+        workDoneString: lap.workDoneString || '',
         startedAt: lap.startTime,
         endedAt: lap.endTime === 0 ? null : lap.endTime,
         duration: (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0),
+        current_hours: lap.current_hours || 0,
+        current_minutes: lap.current_minutes || 0,
+        current_seconds: lap.current_seconds || 0,
         isBreakLap: lap.isBreakLap || false,
         hourlyAmount: lap.HourlyAmount || 0,
       }),
     });
-    markLapSyncedToLive(lap.id);
 
-    // Upload images for this lap if backend lap was created
     if (lapResult && lapResult.id && lap.id) {
+      markLapSyncedToLive(lap.id);
       await uploadLocalImagesToBackend(backendSessionId, lapResult.id, lap.id);
+    } else {
+      throw new Error(`Failed to sync live lap ${lap.id || '(missing id)'}`);
     }
   }
 
-  // Calculate total seconds so far
-  let totalSeconds = 0;
-  laps.forEach((lap) => {
-    totalSeconds += (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0);
-  });
+  const totals = calculateSessionTotals(laps);
 
-  // Update session metadata
   await authRequest(`/sessions/${backendSessionId}`, {
     method: 'PUT',
     body: JSON.stringify({
-      description: `${laps.length} laps, ${totalSeconds}s total (in progress)`,
-      totalDuration: totalSeconds,
+      sessionName: options.sessionName,
+      description: `${laps.length} laps, ${totals.totalSeconds}s total (in progress)`,
+      totalDuration: totals.totalSeconds,
+      totalAmount: totals.totalAmount,
       isCompleted: false,
     }),
   });
@@ -924,31 +1030,33 @@ export async function syncCurrentSessionToBackend(laps) {
  * Called when user stops the timer.
  * Returns the backend session ID or null.
  */
-export async function completeLiveSession(laps) {
+export async function completeLiveSession(laps, localSession = null) {
   if (!isLoggedIn() || !laps || laps.length === 0) return null;
 
+  const localSessionId = localSession?.sessionUuid || localSession?.id || null;
+  const sessionName = localSession?.sessionName || getDefaultSessionName(localSession?.createdAt);
+  if (localSessionId) ensureLiveSessionUuid(localSessionId);
+
   // First sync all laps
-  const backendSessionId = await syncCurrentSessionToBackend(laps);
+  const backendSessionId = await syncCurrentSessionToBackend(laps, {
+    localSessionId,
+    sessionUuid: localSessionId,
+    sessionName,
+  });
   if (!backendSessionId) return null;
 
-  // Calculate totals
-  let totalSeconds = 0;
-  let totalAmount = 0;
-  laps.forEach((lap) => {
-    totalSeconds += (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0);
-    if (typeof lap.getAmount === 'function') {
-      totalAmount += lap.getAmount();
-    }
-  });
+  const totals = calculateSessionTotals(laps);
 
   // Mark as completed
   await authRequest(`/sessions/${backendSessionId}`, {
     method: 'PUT',
     body: JSON.stringify({
+      sessionName,
       endedAt: new Date().toISOString(),
-      totalDuration: totalSeconds,
+      totalDuration: totals.totalSeconds,
+      totalAmount: totals.totalAmount,
       isCompleted: true,
-      description: `${laps.length} laps, ${totalSeconds}s total`,
+      description: localSession?.description || `${laps.length} laps, ${totals.totalSeconds}s total`,
     }),
   });
 
@@ -973,6 +1081,9 @@ export async function completeLiveSession(laps) {
   }
 
   // Clean up live session state
+  if (localSessionId) {
+    markSessionSynced(localSessionId, backendSessionId);
+  }
   clearLiveSessionState();
 
   return backendSessionId;
@@ -1014,22 +1125,17 @@ export function startLiveSessionSync(getLaps) {
         'jlc_live_session_backup',
         JSON.stringify({
           timestamp: Date.now(),
-          laps: laps.map((lap) => ({
-            id: lap.id,
-            startTime: lap.startTime,
-            endTime: lap.endTime,
-            current_hours: lap.current_hours,
-            current_minutes: lap.current_minutes,
-            current_seconds: lap.current_seconds,
-            workDoneString: lap.workDoneString,
-            isBreakLap: lap.isBreakLap,
-            HourlyAmount: lap.HourlyAmount,
-          })),
+          sessionUuid: getLiveSessionUuid(),
+          laps: serializeLaps(laps),
         })
       );
     } catch (e) {
       console.warn('[LiveSync] Failed to save backup:', e.message);
     }
+
+    syncCurrentSessionToBackend(laps).catch((err) => {
+      console.warn('[LiveSync] Periodic sync failed:', err.message);
+    });
   }, 3 * 60 * 1000);
 }
 

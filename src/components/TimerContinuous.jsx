@@ -1,46 +1,11 @@
-import { useState, useEffect } from 'react';
 import PropTypes from 'prop-types';
 import { useContext } from 'react';
 import { LapContext } from '../context/LapContext';
+import { partsFromSeconds } from '../utils/timerMath';
 
-const TimerContinuous = ({ isPlaying, clearTimer, setClearTimer, textClass = 'text-9xl' }) => {
-  const [time, setTime] = useState({
-    hours: 0,
-    minutes: 0,
-    seconds: 0,
-  });
-
+const TimerContinuous = ({ textClass = 'text-9xl' }) => {
   const { getTotalTimeSpentSeconds } = useContext(LapContext);
-
-  useEffect(() => {
-    let interval = null;
-    if (isPlaying) {
-      interval = setInterval(() => {
-        setTime(() => {
-          let time_spent = getTotalTimeSpentSeconds();
-
-          let hours = Math.floor(time_spent / 3600);
-          let minutes = Math.floor((time_spent - hours * 3600) / 60);
-          let seconds = Math.floor(time_spent - hours * 3600 - minutes * 60);
-
-          return {
-            hours: hours,
-            minutes: minutes,
-            seconds: seconds,
-          };
-        });
-      }, 1000);
-    } else {
-      clearInterval(interval);
-    }
-
-    if (clearTimer) {
-      setTime({ hours: 0, minutes: 0, seconds: 0 });
-      setClearTimer(false);
-    }
-
-    return () => clearInterval(interval);
-  }, [isPlaying, clearTimer, setClearTimer]);
+  const time = partsFromSeconds(getTotalTimeSpentSeconds());
 
   return (
     <div className={`${textClass} font-bold text-accent`}>
@@ -51,9 +16,6 @@ const TimerContinuous = ({ isPlaying, clearTimer, setClearTimer, textClass = 'te
 };
 
 TimerContinuous.propTypes = {
-  isPlaying: PropTypes.bool.isRequired,
-  clearTimer: PropTypes.bool.isRequired,
-  setClearTimer: PropTypes.func.isRequired,
   textClass: PropTypes.string,
 };
 

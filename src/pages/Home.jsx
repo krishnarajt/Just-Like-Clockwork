@@ -14,10 +14,12 @@ import ControlButtons from '../components/ControlButtons';
 
 // importing api functions
 import {
-  isLoggedIn,
   fetchBackendSessions,
   fetchSessionDetail,
   fetchSessionLaps,
+  setLiveBackendSessionId,
+  setLiveSessionUuid,
+  markLapSyncedToLive,
 } from '../utils/apiClient';
 import WorkLap from '../classes/WorkLapClass';
 
@@ -32,10 +34,6 @@ const Home = () => {
     setIsPlaying,
     started,
     setStarted,
-    clearTimer,
-    setClearTimer,
-    clearLapTimer,
-    setClearLapTimer,
     activeLapId,
     setActiveLapId,
   } = useContext(LapContext);
@@ -119,7 +117,8 @@ const Home = () => {
         const workDone = lap.lapName || lap.lap_name || lap.workDoneString || '';
         const hourlyAmount = lap.hourlyAmount || lap.hourly_amount || lap.HourlyAmount || 0;
 
-        const workLap = new WorkLap(startTime, endTime, hours, minutes, seconds, workDone, hourlyAmount);
+        const lapUuid = lap.lapUuid || lap.lap_uuid || undefined;
+        const workLap = new WorkLap(startTime, endTime, hours, minutes, seconds, workDone, hourlyAmount, lapUuid);
         workLap.setIsBreakLap(lap.isBreakLap || lap.is_break_lap || false);
         return workLap;
       });
@@ -128,6 +127,9 @@ const Home = () => {
       restoredLaps.reverse();
 
       setLaps(restoredLaps);
+      setLiveBackendSessionId(restoredSession.id);
+      setLiveSessionUuid(restoredSession.sessionUuid || restoredSession.session_uuid || null);
+      restoredLaps.forEach((lap) => markLapSyncedToLive(lap.id));
       setShowRestoreBanner(false);
       // Don't auto-start — session is paused
     } catch (err) {
@@ -181,11 +183,6 @@ const Home = () => {
 
       {/* Timer */}
       <TimerDisplay
-        isPlaying={isPlaying}
-        clearLapTimer={clearLapTimer}
-        setClearLapTimer={setClearLapTimer}
-        clearTimer={clearTimer}
-        setClearTimer={setClearTimer}
         lap={activeLapId}
         enlarged={minimalistMode}
       />
@@ -196,10 +193,6 @@ const Home = () => {
         setIsPlaying={setIsPlaying}
         started={started}
         setStarted={setStarted}
-        clearTimer={clearTimer}
-        setClearTimer={setClearTimer}
-        clearLapTimer={clearLapTimer}
-        setClearLapTimer={setClearLapTimer}
         lap={activeLapId}
         setLap={setActiveLapId}
       />

@@ -1,21 +1,21 @@
 import { useState, useEffect, useContext, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { getSessions, deleteSession, clearAllSessions } from '../utils/sessionStore';
+import { getSessions, deleteSession, clearAllSessions, updateSession as updateLocalSession } from '../utils/sessionStore';
 import {
   getSyncedSessionIds,
   syncSessionToBackend,
-  isLoggedIn,
   fetchBackendSessions,
   fetchSessionDetail,
   fetchSessionLaps,
-  fetchSessionImages,
   deleteBackendSession,
   updateSessionOnBackend,
   updateLapOnBackend,
   uploadImageToBackend,
+  unmarkSessionSynced,
 } from '../utils/apiClient';
 import { AuthContext } from '../context/AuthContext';
 import { getImages, addImage, removeImage } from '../utils/imageStore';
+import { mergeLocalAndBackendSessions } from '../utils/sessionMerge';
 import {
   exportSessionCSV,
   exportSessionJSON,
@@ -24,7 +24,6 @@ import {
   exportAllSessionsJSON,
   exportAllSessionsPDF,
 } from '../components/export/to_session';
-import { showToast } from '../utils/toast';
 
 // ============ Inline Editable Text Component ============
 function InlineEdit({ value, onSave, placeholder, className = '', inputClassName = '', multiline = false }) {
@@ -98,7 +97,7 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
   useEffect(() => {
     const imgMap = {};
     laps.forEach((lap) => {
-      const lapId = lap.id || lap.lapUuid || lap.lap_uuid;
+      const lapId = lap.lapUuid || lap.lap_uuid || lap.id;
       if (lapId) {
         // For local sessions, load from localStorage
         const localImgs = getImages(String(lapId));
@@ -110,7 +109,7 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
     setLocalLapImages(imgMap);
   }, [laps]);
 
-  const handleFileUpload = (lapId, e) => {
+  const handleFileUpload = (lapId, e, backendLapId = null) => {
     const file = e.target.files[0];
     if (!file || !file.type.startsWith('image/')) return;
     e.target.value = '';
@@ -139,8 +138,8 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
         }));
 
         // If backend session, also upload to backend
-        if (session._source === 'backend' && session._backendId) {
-          uploadImageToBackend(session._backendId, lap.id, compressed, `image_${Date.now()}.jpg`).catch(() => {
+        if (session._backendId && backendLapId) {
+          uploadImageToBackend(session._backendId, backendLapId, compressed, `image_${Date.now()}.jpg`).catch(() => {
             console.warn('[Sessions] Failed to upload image to backend');
           });
         }
@@ -174,15 +173,16 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
 
   // Normalize lap for display
   const normalizeLap = (lap) => {
-    if (session._source === 'backend') {
+    if (session._backendId) {
       return {
-        id: lap.id,
+        id: lap.lapUuid || lap.lap_uuid || lap.id,
+        backendId: lap.id,
         lapUuid: lap.lapUuid || lap.lap_uuid,
         startTime: lap.startedAt || lap.started_at || lap.startTime || '—',
         endTime: lap.endedAt || lap.ended_at || lap.endTime || '—',
-        current_hours: lap.hours || Math.floor((lap.duration || 0) / 3600),
-        current_minutes: lap.minutes || Math.floor(((lap.duration || 0) % 3600) / 60),
-        current_seconds: lap.seconds || Math.round((lap.duration || 0) % 60),
+        current_hours: lap.currentHours ?? lap.current_hours ?? lap.hours ?? Math.floor((lap.duration || 0) / 3600),
+        current_minutes: lap.currentMinutes ?? lap.current_minutes ?? lap.minutes ?? Math.floor(((lap.duration || 0) % 3600) / 60),
+        current_seconds: lap.currentSeconds ?? lap.current_seconds ?? lap.seconds ?? Math.round((lap.duration || 0) % 60),
         workDoneString: lap.lapName || lap.lap_name || lap.workDoneString || '',
         isBreakLap: lap.isBreakLap || lap.is_break_lap || false,
         images: lap.images || [],
@@ -192,7 +192,7 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
   };
 
   // Display laps chronologically
-  const displayLaps = session._source === 'backend' ? laps : [...laps].reverse();
+  const displayLaps = session._backendId ? laps : [...laps].reverse();
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -213,7 +213,8 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
           )}
           {displayLaps.map((rawLap, i) => {
             const lap = normalizeLap(rawLap);
-            const lapId = lap.id || lap.lapUuid;
+            const lapId = lap.lapUuid || lap.id;
+            const backendLapId = lap.backendId || (typeof rawLap.id === 'number' ? rawLap.id : null);
             const totalSec = (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0);
             const images = localLapImages[lapId] || [];
 
@@ -237,8 +238,8 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
                         checked={lap.isBreakLap || false}
                         onChange={(e) => {
                           // For backend sessions, update via API
-                          if (session._source === 'backend' && session._backendId && lap.id) {
-                            updateLapOnBackend(session._backendId, lap.id, { isBreakLap: e.target.checked }).catch(() => {});
+                          if (session._backendId && backendLapId) {
+                            updateLapOnBackend(session._backendId, backendLapId, { isBreakLap: e.target.checked }).catch(() => {});
                           }
                           onLapUpdate(lapId, { isBreakLap: e.target.checked });
                         }}
@@ -257,8 +258,8 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
                   }}
                   onBlur={(e) => {
                     // Save to backend on blur
-                    if (session._source === 'backend' && session._backendId && lap.id) {
-                      updateLapOnBackend(session._backendId, lap.id, { lapName: e.target.value }).catch(() => {});
+                    if (session._backendId && backendLapId) {
+                      updateLapOnBackend(session._backendId, backendLapId, { lapName: e.target.value, workDoneString: e.target.value }).catch(() => {});
                     }
                   }}
                   onPaste={(e) => {
@@ -269,7 +270,7 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
                       if (items[j].type.startsWith('image/')) {
                         e.preventDefault();
                         const file = items[j].getAsFile();
-                        if (file) handleFileUpload(lapId, { target: { files: [file], value: '' } });
+                        if (file) handleFileUpload(lapId, { target: { files: [file], value: '' } }, backendLapId);
                         break;
                       }
                     }
@@ -285,7 +286,7 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
                         const input = document.createElement('input');
                         input.type = 'file';
                         input.accept = 'image/*';
-                        input.onchange = (e) => handleFileUpload(lapId, e);
+                        input.onchange = (e) => handleFileUpload(lapId, e, backendLapId);
                         fileInputRefs.current[lapId] = input;
                       }
                       fileInputRefs.current[lapId].click();
@@ -387,56 +388,22 @@ export default function Sessions() {
 
   // Merge local and backend sessions
   useEffect(() => {
-    const synced = getSyncedSessionIds();
-    const merged = [];
-
-    localSessions.forEach((s) => {
-      merged.push({ ...s, _source: synced.includes(s.id) ? 'synced' : 'local', _localId: s.id });
-    });
-
-    backendSessions.forEach((bs) => {
-      const isDuplicate = localSessions.some((ls) => {
-        const bsStart = new Date(bs.startedAt || bs.started_at || bs.created_at).getTime();
-        const lsStart = new Date(ls.startTime || ls.createdAt).getTime();
-        return Math.abs(bsStart - lsStart) < 5000 && ls.lapCount === (bs.lapCount || bs.lap_count || 0);
-      });
-
-      if (!isDuplicate) {
-        merged.push({
-          id: bs.id,
-          createdAt: bs.startedAt || bs.started_at || bs.created_at || bs.createdAt,
-          startTime: bs.startedAt || bs.started_at,
-          endTime: bs.endedAt || bs.ended_at || null,
-          lapCount: bs.lapCount || bs.lap_count || 0,
-          totalSeconds: bs.totalDuration || bs.total_duration || 0,
-          totalAmount: bs.totalAmount || bs.total_amount || 0,
-          sessionName: bs.sessionName || bs.session_name || '',
-          description: bs.description || '',
-          isCompleted: bs.isCompleted ?? bs.is_completed ?? true,
-          laps: [],
-          _source: 'backend',
-          _backendId: bs.id,
-        });
-      }
-    });
-
-    merged.sort((a, b) => new Date(b.createdAt || b.startTime).getTime() - new Date(a.createdAt || a.startTime).getTime());
-    setMergedSessions(merged);
-  }, [localSessions, backendSessions]);
+    setMergedSessions(mergeLocalAndBackendSessions(localSessions, backendSessions, getSyncedSessionIds()));
+  }, [localSessions, backendSessions, syncedIds]);
 
   // Expand session — load laps
   const handleExpand = async (sessionId, session) => {
     if (expandedSession === sessionId) { setExpandedSession(null); return; }
     setExpandedSession(sessionId);
 
-    if (session._source === 'backend' && (!session.laps || session.laps.length === 0)) {
+    if (session._backendId) {
       setLoadingLaps(sessionId);
       try {
-        const detail = await fetchSessionDetail(sessionId);
+        const detail = await fetchSessionDetail(session._backendId);
         if (detail && detail.laps && detail.laps.length > 0) {
           setExpandedLaps((prev) => ({ ...prev, [sessionId]: detail.laps }));
         } else {
-          const laps = await fetchSessionLaps(sessionId);
+          const laps = await fetchSessionLaps(session._backendId);
           if (laps && Array.isArray(laps)) setExpandedLaps((prev) => ({ ...prev, [sessionId]: laps }));
           else if (laps && laps.laps) setExpandedLaps((prev) => ({ ...prev, [sessionId]: laps.laps }));
         }
@@ -447,16 +414,23 @@ export default function Sessions() {
 
   // Save session name/description
   const handleSessionNameSave = async (session, newName) => {
-    if (session._source === 'backend') {
-      await updateSessionOnBackend(session.id, { sessionName: newName });
+    if (session._backendId) {
+      await updateSessionOnBackend(session._backendId, { sessionName: newName });
     }
-    // Update local merged state
+    if (session._localId) {
+      updateLocalSession(session._localId, { sessionName: newName });
+      setLocalSessions(getSessions());
+    }
     setMergedSessions((prev) => prev.map((s) => s.id === session.id ? { ...s, sessionName: newName } : s));
   };
 
   const handleSessionDescSave = async (session, newDesc) => {
-    if (session._source === 'backend') {
-      await updateSessionOnBackend(session.id, { description: newDesc });
+    if (session._backendId) {
+      await updateSessionOnBackend(session._backendId, { description: newDesc });
+    }
+    if (session._localId) {
+      updateLocalSession(session._localId, { description: newDesc });
+      setLocalSessions(getSessions());
     }
     setMergedSessions((prev) => prev.map((s) => s.id === session.id ? { ...s, description: newDesc } : s));
   };
@@ -464,14 +438,15 @@ export default function Sessions() {
   // Open edit modal for a session
   const handleOpenEditModal = async (session) => {
     let laps = [];
-    if (session._source === 'backend') {
+    if (session._backendId) {
       // Fetch laps if not already loaded
       if (expandedLaps[session.id]) {
         laps = expandedLaps[session.id];
       } else {
-        const detail = await fetchSessionDetail(session.id);
+        const detail = await fetchSessionDetail(session._backendId);
         if (detail && detail.laps) laps = detail.laps;
       }
+      if (laps.length === 0 && session.laps?.length > 0) laps = session.laps;
     } else {
       laps = session.laps || [];
     }
@@ -482,35 +457,61 @@ export default function Sessions() {
   // Handle lap update from modal
   const handleLapUpdate = (lapId, updates) => {
     setEditingLaps((prev) => prev.map((lap) => {
-      const id = lap.id || lap.lapUuid || lap.lap_uuid;
+      const id = lap.lapUuid || lap.lap_uuid || lap.id;
       if (id === lapId) {
         return { ...lap, ...updates, lapName: updates.workDoneString !== undefined ? updates.workDoneString : lap.lapName };
       }
       return lap;
     }));
+    if (editingSession?._localId) {
+      updateLocalSession(editingSession._localId, (session) => ({
+        laps: (session.laps || []).map((lap) => {
+          const id = lap.lapUuid || lap.lap_uuid || lap.id;
+          if (id !== lapId) return lap;
+          return {
+            ...lap,
+            ...updates,
+            workDoneString: updates.workDoneString ?? lap.workDoneString,
+            isBreakLap: updates.isBreakLap ?? lap.isBreakLap,
+          };
+        }),
+      }));
+      setLocalSessions(getSessions());
+    }
   };
 
   const handleSyncSession = async (session) => {
     if (!loggedIn || syncingId) return;
     setSyncingId(session.id);
-    const result = await syncSessionToBackend(session);
-    if (result) setSyncedIds(getSyncedSessionIds());
+    const localSession = session._localId ? getSessions().find((s) => s.id === session._localId) : session;
+    if (!localSession) {
+      setSyncingId(null);
+      return;
+    }
+    const result = await syncSessionToBackend(localSession);
+    if (result) {
+      setSyncedIds(getSyncedSessionIds());
+      await loadBackendSessions();
+    }
     setSyncingId(null);
   };
 
   const handleSyncAll = async () => {
     if (!loggedIn) return;
     for (const session of localSessions) {
-      if (!syncedIds.includes(session.id)) await handleSyncSession(session);
+      await handleSyncSession(session);
     }
   };
 
-  const handleDelete = async (id, source) => {
-    if (source === 'backend') {
-      await deleteBackendSession(id);
-      setBackendSessions((prev) => prev.filter((s) => s.id !== id));
-    } else {
-      deleteSession(id);
+  const handleDelete = async (session) => {
+    if (session._backendId) {
+      await deleteBackendSession(session._backendId);
+      setBackendSessions((prev) => prev.filter((s) => s.id !== session._backendId));
+    }
+    if (session._localId || session._source !== 'backend') {
+      const localId = session._localId || session.id;
+      deleteSession(localId);
+      unmarkSessionSynced(localId);
       setLocalSessions(getSessions());
     }
   };
@@ -536,19 +537,21 @@ export default function Sessions() {
   };
 
   const getSessionLaps = (session) => {
-    if (session._source === 'backend') return expandedLaps[session.id] || [];
+    if (session._backendId && expandedLaps[session.id]) return expandedLaps[session.id] || [];
     return session.laps || [];
   };
 
   const normalizeLap = (lap, source) => {
-    if (source === 'backend') {
+    if (source === 'backend' || source === 'synced') {
       return {
-        id: lap.id,
+        id: lap.lapUuid || lap.lap_uuid || lap.id,
+        backendId: lap.id,
+        lapUuid: lap.lapUuid || lap.lap_uuid,
         startTime: lap.startedAt || lap.started_at || lap.startTime || '—',
         endTime: lap.endedAt || lap.ended_at || lap.endTime || '—',
-        current_hours: lap.hours || Math.floor((lap.duration || 0) / 3600),
-        current_minutes: lap.minutes || Math.floor(((lap.duration || 0) % 3600) / 60),
-        current_seconds: lap.seconds || Math.round((lap.duration || 0) % 60),
+        current_hours: lap.currentHours ?? lap.current_hours ?? lap.hours ?? Math.floor((lap.duration || 0) / 3600),
+        current_minutes: lap.currentMinutes ?? lap.current_minutes ?? lap.minutes ?? Math.floor(((lap.duration || 0) % 3600) / 60),
+        current_seconds: lap.currentSeconds ?? lap.current_seconds ?? lap.seconds ?? Math.round((lap.duration || 0) % 60),
         workDoneString: lap.lapName || lap.lap_name || lap.workDoneString || '',
         isBreakLap: lap.isBreakLap || lap.is_break_lap || false,
         images: lap.images || [],
@@ -662,7 +665,7 @@ export default function Sessions() {
                               className="text-xs text-base-content/40"
                             />
                           )}
-                          {!session.description && session._source === 'backend' && (
+                          {!session.description && session._backendId && (
                             <InlineEdit
                               value=""
                               onSave={(v) => handleSessionDescSave(session, v)}
@@ -725,7 +728,7 @@ export default function Sessions() {
                         {/* Delete */}
                         <button
                           className="btn btn-ghost btn-sm btn-circle text-error/50 hover:text-error"
-                          onClick={(e) => { e.stopPropagation(); handleDelete(session.id, session._source); }}
+                          onClick={(e) => { e.stopPropagation(); handleDelete(session); }}
                           title="Delete session"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -751,7 +754,7 @@ export default function Sessions() {
                           const laps = getSessionLaps(session);
                           if (laps.length === 0) return <div className="text-center py-4 text-base-content/40">No lap data available.</div>;
 
-                          const displayLaps = session._source === 'backend' ? laps : [...laps].reverse();
+                          const displayLaps = session._backendId && expandedLaps[session.id] ? laps : [...laps].reverse();
                           return (
                             <table className="table table-sm">
                               <thead>

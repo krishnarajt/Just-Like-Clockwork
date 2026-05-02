@@ -5,19 +5,10 @@ import TimerContinuous from '../components/TimerContinuous';
 import PropTypes from 'prop-types';
 
 export default function TimerDisplay({
-  isPlaying,
-  clearLapTimer,
-  setClearLapTimer,
-  clearTimer,
-  setClearTimer,
   lap,
   enlarged = false,
 }) {
-  const UpdateCurrentWorkLapTime = (lapId, hours, minutes, seconds) => {
-    updateLap(lapId, hours, minutes, seconds);
-  };
-
-  const { laps, getLapFromId, getFirstLap, updateLap } = useContext(LapContext);
+  const { laps, getLapFromId, getFirstLap } = useContext(LapContext);
 
   // In enlarged/minimalist mode, show a bigger timer
   const timerTextClass = enlarged ? 'text-[10vw] md:text-[8vw] lg:text-[7rem]' : 'text-9xl';
@@ -30,10 +21,6 @@ export default function TimerDisplay({
           <div className={`outline ${containerPadding} rounded-xl pb-2 outline-base-300`}>
             <Timer
               lap={getLapFromId(lap) ? getLapFromId(lap) : getFirstLap()}
-              isPlaying={isPlaying}
-              clearTimer={clearLapTimer}
-              setClearTimer={setClearLapTimer}
-              UpdateCurrentWorkLapTime={UpdateCurrentWorkLapTime}
               textClass={timerTextClass}
             />
             <div className="flex justify-center items-center text-center text-2xl italic text-secondary">
@@ -42,9 +29,6 @@ export default function TimerDisplay({
           </div>
           <div className={`outline ${containerPadding} rounded-xl pb-2 outline-base-300`}>
             <TimerContinuous
-              isPlaying={isPlaying}
-              clearTimer={clearTimer}
-              setClearTimer={setClearTimer}
               textClass={timerTextClass}
             />
             <div className="flex justify-center items-center text-center text-2xl italic text-secondary">
@@ -74,11 +58,6 @@ export default function TimerDisplay({
 
 // props validation
 TimerDisplay.propTypes = {
-  isPlaying: PropTypes.bool.isRequired,
-  clearLapTimer: PropTypes.bool.isRequired,
-  setClearLapTimer: PropTypes.func.isRequired,
-  clearTimer: PropTypes.bool.isRequired,
-  setClearTimer: PropTypes.func.isRequired,
   lap: PropTypes.string.isRequired,
   enlarged: PropTypes.bool,
 };

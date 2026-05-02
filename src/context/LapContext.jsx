@@ -1,9 +1,15 @@
 import { createContext, useState, useEffect, useRef, useCallback } from 'react';
+import PropTypes from 'prop-types';
 import { v4 as uuidv4 } from 'uuid';
 import getFromLocalStorage from '../components/import/from_local';
 import saveToLocalStorage from '../components/export/to_local';
 import WorkLap from '../classes/WorkLapClass';
 import { playNotificationSound, showBrowserNotification } from '../utils/notification';
+import {
+  elapsedSecondsFromWallClock,
+  partsFromSeconds,
+  secondsFromParts,
+} from '../utils/timerMath';
 
 // Create the context
 export const LapContext = createContext();
@@ -26,14 +32,39 @@ const LapProvider = ({ children }) => {
   // --- Timer control state (lifted here so it persists across route/tab changes) ---
   const [isPlaying, setIsPlaying] = useState(false);
   const [started, setStarted] = useState(false);
-  const [clearTimer, setClearTimer] = useState(false);
-  const [clearLapTimer, setClearLapTimer] = useState(false);
   const [activeLapId, setActiveLapId] = useState('');
 
   // Notification timer ref
   const notificationTimerRef = useRef(null);
+  const lapsRef = useRef(laps);
+  const activeTimerRef = useRef({
+    playing: false,
+    lapId: '',
+    baseElapsedSeconds: 0,
+    runningSinceMs: 0,
+    latestElapsedSeconds: 0,
+  });
+
+  useEffect(() => {
+    lapsRef.current = laps;
+  }, [laps]);
+
+  const replaceLaps = useCallback((nextLapsOrUpdater) => {
+    if (typeof nextLapsOrUpdater === 'function') {
+      setLaps((previousLaps) => {
+        const nextLaps = nextLapsOrUpdater(previousLaps);
+        lapsRef.current = nextLaps;
+        return nextLaps;
+      });
+      return;
+    }
+
+    lapsRef.current = nextLapsOrUpdater;
+    setLaps(nextLapsOrUpdater);
+  }, []);
 
   function handleLapLocalUpdate(laps) {
+    lapsRef.current = laps;
     setLaps(laps);
   }
 
@@ -141,11 +172,21 @@ const LapProvider = ({ children }) => {
   const addLap = (lap) => {
     lap.setHourlyAmount(amount);
     // new lap at front (newest first)
-    setLaps((prevLaps) => [lap, ...prevLaps]);
+    const nextLaps = [lap, ...lapsRef.current];
+    lapsRef.current = nextLaps;
+    setLaps(nextLaps);
   };
 
   // Remove all laps
   const resetLaps = () => {
+    lapsRef.current = [];
+    activeTimerRef.current = {
+      playing: false,
+      lapId: '',
+      baseElapsedSeconds: 0,
+      runningSinceMs: 0,
+      latestElapsedSeconds: 0,
+    };
     setLaps([]);
   };
 
@@ -161,12 +202,13 @@ const LapProvider = ({ children }) => {
 
   // Update work done by ID
   const updateWorkDoneByID = (id, workDone) => {
-    const newLaps = laps.map((lap) => {
+    const newLaps = lapsRef.current.map((lap) => {
       if (lap.id === id) {
         lap.setWorkDoneString(workDone);
       }
       return lap;
     });
+    lapsRef.current = newLaps;
     setLaps([...newLaps]);
   };
 
@@ -176,9 +218,9 @@ const LapProvider = ({ children }) => {
     localStorage.setItem('hourlyAmount', JSON.stringify(newAmount));
   };
 
-  // Update a lap's time
-  const updateLap = (lapId, hours, minutes, seconds) => {
-    const newLaps = laps.map((lap) => {
+  const writeLapElapsedSeconds = useCallback((lapId, elapsedSeconds) => {
+    const { hours, minutes, seconds } = partsFromSeconds(elapsedSeconds);
+    const nextLaps = lapsRef.current.map((lap) => {
       if (lap.id === lapId) {
         lap.setCurrentHours(hours);
         lap.setCurrentMinutes(minutes);
@@ -186,151 +228,237 @@ const LapProvider = ({ children }) => {
       }
       return lap;
     });
+
+    lapsRef.current = nextLaps;
+    setLaps(nextLaps);
+
+    return { hours, minutes, seconds };
+  }, []);
+
+  const getLapElapsedSeconds = useCallback((lap) => {
+    if (!lap) return 0;
+    return secondsFromParts(lap.getCurrentHours(), lap.getCurrentMinutes(), lap.getCurrentSeconds());
+  }, []);
+
+  const flushActiveLapTime = useCallback((lapId = activeTimerRef.current.lapId, nowMs = Date.now()) => {
+    const timerState = activeTimerRef.current;
+    const targetLapId = lapId || timerState.lapId;
+
+    if (!targetLapId) {
+      return { hours: 0, minutes: 0, seconds: 0 };
+    }
+
+    const lap = lapsRef.current.find((item) => item.id === targetLapId);
+    if (!lap) {
+      return { hours: 0, minutes: 0, seconds: 0 };
+    }
+
+    const elapsedSeconds =
+      timerState.playing && timerState.lapId === targetLapId
+        ? elapsedSecondsFromWallClock(timerState.baseElapsedSeconds, timerState.runningSinceMs, nowMs)
+        : getLapElapsedSeconds(lap);
+
+    timerState.latestElapsedSeconds = elapsedSeconds;
+    return writeLapElapsedSeconds(targetLapId, elapsedSeconds);
+  }, [getLapElapsedSeconds, writeLapElapsedSeconds]);
+
+  useEffect(() => {
+    if (!isPlaying || !activeLapId) {
+      if (activeTimerRef.current.playing) {
+        flushActiveLapTime(activeTimerRef.current.lapId);
+      }
+      activeTimerRef.current.playing = false;
+      return undefined;
+    }
+
+    const activeLap = lapsRef.current.find((lap) => lap.id === activeLapId);
+    const baseElapsedSeconds = getLapElapsedSeconds(activeLap);
+    activeTimerRef.current = {
+      playing: true,
+      lapId: activeLapId,
+      baseElapsedSeconds,
+      runningSinceMs: Date.now(),
+      latestElapsedSeconds: baseElapsedSeconds,
+    };
+
+    const syncFromClock = () => {
+      flushActiveLapTime(activeLapId);
+    };
+
+    syncFromClock();
+
+    const interval = window.setInterval(syncFromClock, 1000);
+    const syncOnVisibilityChange = () => syncFromClock();
+
+    window.addEventListener('focus', syncFromClock);
+    window.addEventListener('pageshow', syncFromClock);
+    window.addEventListener('pagehide', syncFromClock);
+    document.addEventListener('visibilitychange', syncOnVisibilityChange);
+
+    return () => {
+      syncFromClock();
+      window.clearInterval(interval);
+      window.removeEventListener('focus', syncFromClock);
+      window.removeEventListener('pageshow', syncFromClock);
+      window.removeEventListener('pagehide', syncFromClock);
+      document.removeEventListener('visibilitychange', syncOnVisibilityChange);
+    };
+  }, [activeLapId, flushActiveLapTime, getLapElapsedSeconds, isPlaying]);
+
+  // Update a lap's time
+  const updateLap = (lapId, hours, minutes, seconds) => {
+    const newLaps = lapsRef.current.map((lap) => {
+      if (lap.id === lapId) {
+        lap.setCurrentHours(hours);
+        lap.setCurrentMinutes(minutes);
+        lap.setCurrentSeconds(seconds);
+      }
+      return lap;
+    });
+    lapsRef.current = newLaps;
     setLaps(newLaps);
   };
 
   // --- Split a lap into two equal halves ---
   const splitLap = useCallback((lapId) => {
-    setLaps((prevLaps) => {
-      const index = prevLaps.findIndex((l) => l.id === lapId);
-      if (index === -1) return prevLaps;
+    const prevLaps = lapsRef.current;
+    const index = prevLaps.findIndex((l) => l.id === lapId);
+    if (index === -1) return;
 
-      const lap = prevLaps[index];
+    const lap = prevLaps[index];
 
-      // Don't split the currently active/running lap (endTime === 0 means still running)
-      if (lap.endTime === 0) {
-        // Import dynamically to avoid circular deps
-        import('../utils/toast.js').then(({ showToast }) => {
-          showToast('Cannot split the currently running lap. Finish or lap it first.', 'warning');
-        });
-        return prevLaps;
-      }
-
-      const totalSeconds = lap.getTotalTimeInSecondsRaw();
-      if (totalSeconds < 2) {
-        import('../utils/toast.js').then(({ showToast }) => {
-          showToast('Lap is too short to split (needs at least 2 seconds).', 'warning');
-        });
-        return prevLaps;
-      }
-
-      const halfSeconds = Math.floor(totalSeconds / 2);
-      const remainderSeconds = totalSeconds - halfSeconds;
-
-      // Calculate hours/minutes/seconds for each half
-      const h1 = Math.floor(halfSeconds / 3600);
-      const m1 = Math.floor((halfSeconds % 3600) / 60);
-      const s1 = halfSeconds % 60;
-
-      const h2 = Math.floor(remainderSeconds / 3600);
-      const m2 = Math.floor((remainderSeconds % 3600) / 60);
-      const s2 = remainderSeconds % 60;
-
-      // Calculate midpoint time for start/end times
-      // Parse start time safely - try ISO first, then locale string
-      let startMs;
-      const startDate = new Date(lap.startTime);
-      if (isNaN(startDate.getTime())) {
-        // If parsing fails, use endTime minus totalSeconds as fallback
-        const endDate = new Date(lap.endTime);
-        startMs = endDate.getTime() - (totalSeconds * 1000);
-      } else {
-        startMs = startDate.getTime();
-      }
-
-      const halfMs = halfSeconds * 1000;
-      const midMs = startMs + halfMs;
-      const midDateStr = new Date(midMs).toLocaleString();
-
-      // First half (same start, mid end)
-      const lap1 = new WorkLap(
-        lap.startTime,
-        midDateStr,
-        h1, m1, s1,
-        lap.workDoneString,
-        lap.HourlyAmount,
-        uuidv4()
-      );
-      lap1.setIsBreakLap(lap.isBreakLap);
-
-      // Second half (mid start, same end)
-      const lap2 = new WorkLap(
-        midDateStr,
-        lap.endTime,
-        h2, m2, s2,
-        '', // Second half gets empty work done
-        lap.HourlyAmount,
-        uuidv4()
-      );
-      lap2.setIsBreakLap(lap.isBreakLap);
-
-      // Laps are stored newest-first, so the "first half" is chronologically earlier (goes after)
-      // and the "second half" is chronologically later (goes before/at same index)
-      const newLaps = [...prevLaps];
-      newLaps.splice(index, 1, lap2, lap1); // Replace original with: [newer half, older half]
-
+    // Don't split the currently active/running lap (endTime === 0 means still running)
+    if (lap.endTime === 0) {
+      // Import dynamically to avoid circular deps
       import('../utils/toast.js').then(({ showToast }) => {
-        showToast('Lap split into two equal halves.', 'success');
+        showToast('Cannot split the currently running lap. Finish or lap it first.', 'warning');
       });
+      return;
+    }
 
-      return newLaps;
+    const totalSeconds = lap.getTotalTimeInSecondsRaw();
+    if (totalSeconds < 2) {
+      import('../utils/toast.js').then(({ showToast }) => {
+        showToast('Lap is too short to split (needs at least 2 seconds).', 'warning');
+      });
+      return;
+    }
+
+    const halfSeconds = Math.floor(totalSeconds / 2);
+    const remainderSeconds = totalSeconds - halfSeconds;
+
+    // Calculate hours/minutes/seconds for each half
+    const h1 = Math.floor(halfSeconds / 3600);
+    const m1 = Math.floor((halfSeconds % 3600) / 60);
+    const s1 = halfSeconds % 60;
+
+    const h2 = Math.floor(remainderSeconds / 3600);
+    const m2 = Math.floor((remainderSeconds % 3600) / 60);
+    const s2 = remainderSeconds % 60;
+
+    // Calculate midpoint time for start/end times
+    // Parse start time safely - try ISO first, then locale string
+    let startMs;
+    const startDate = new Date(lap.startTime);
+    if (isNaN(startDate.getTime())) {
+      // If parsing fails, use endTime minus totalSeconds as fallback
+      const endDate = new Date(lap.endTime);
+      startMs = endDate.getTime() - (totalSeconds * 1000);
+    } else {
+      startMs = startDate.getTime();
+    }
+
+    const halfMs = halfSeconds * 1000;
+    const midMs = startMs + halfMs;
+    const midDateStr = new Date(midMs).toLocaleString();
+
+    // First half (same start, mid end)
+    const lap1 = new WorkLap(
+      lap.startTime,
+      midDateStr,
+      h1, m1, s1,
+      lap.workDoneString,
+      lap.HourlyAmount,
+      uuidv4()
+    );
+    lap1.setIsBreakLap(lap.isBreakLap);
+
+    // Second half (mid start, same end)
+    const lap2 = new WorkLap(
+      midDateStr,
+      lap.endTime,
+      h2, m2, s2,
+      '', // Second half gets empty work done
+      lap.HourlyAmount,
+      uuidv4()
+    );
+    lap2.setIsBreakLap(lap.isBreakLap);
+
+    // Laps are stored newest-first, so the "first half" is chronologically earlier (goes after)
+    // and the "second half" is chronologically later (goes before/at same index)
+    const newLaps = [...prevLaps];
+    newLaps.splice(index, 1, lap2, lap1); // Replace original with: [newer half, older half]
+    lapsRef.current = newLaps;
+    setLaps(newLaps);
+
+    import('../utils/toast.js').then(({ showToast }) => {
+      showToast('Lap split into two equal halves.', 'success');
     });
   }, []);
 
   // --- Merge two adjacent laps ---
   const mergeLaps = useCallback((lapId1, lapId2) => {
-    setLaps((prevLaps) => {
-      const idx1 = prevLaps.findIndex((l) => l.id === lapId1);
-      const idx2 = prevLaps.findIndex((l) => l.id === lapId2);
-      if (idx1 === -1 || idx2 === -1) return prevLaps;
+    const prevLaps = lapsRef.current;
+    const idx1 = prevLaps.findIndex((l) => l.id === lapId1);
+    const idx2 = prevLaps.findIndex((l) => l.id === lapId2);
+    if (idx1 === -1 || idx2 === -1) return;
 
-      const lap1 = prevLaps[idx1];
-      const lap2 = prevLaps[idx2];
+    const lap1 = prevLaps[idx1];
+    const lap2 = prevLaps[idx2];
 
-      // Don't merge if either lap is currently active (endTime === 0)
-      if (lap1.endTime === 0 || lap2.endTime === 0) {
-        import('../utils/toast.js').then(({ showToast }) => {
-          showToast('Cannot merge with the currently running lap. Finish or lap it first.', 'warning');
-        });
-        return prevLaps;
-      }
-
-      // Determine which is chronologically earlier (higher index = older in newest-first array)
-      const olderLap = idx1 > idx2 ? lap1 : lap2;
-      const newerLap = idx1 > idx2 ? lap2 : lap1;
-      const olderIdx = Math.max(idx1, idx2);
-      const newerIdx = Math.min(idx1, idx2);
-
-      // Merge times
-      const totalSeconds = olderLap.getTotalTimeInSecondsRaw() + newerLap.getTotalTimeInSecondsRaw();
-      const h = Math.floor(totalSeconds / 3600);
-      const m = Math.floor((totalSeconds % 3600) / 60);
-      const s = totalSeconds % 60;
-
-      // Merge work done strings
-      const workParts = [olderLap.workDoneString, newerLap.workDoneString].filter(Boolean);
-      const mergedWork = workParts.join('\n');
-
-      // Create merged lap with older's start and newer's end
-      const mergedLap = new WorkLap(
-        olderLap.startTime,
-        newerLap.endTime,
-        h, m, s,
-        mergedWork,
-        olderLap.HourlyAmount,
-        uuidv4()
-      );
-      mergedLap.setIsBreakLap(olderLap.isBreakLap && newerLap.isBreakLap);
-
-      // Remove both and insert merged at the newer position
-      const newLaps = prevLaps.filter((_, i) => i !== olderIdx && i !== newerIdx);
-      newLaps.splice(newerIdx, 0, mergedLap);
-
+    // Don't merge if either lap is currently active (endTime === 0)
+    if (lap1.endTime === 0 || lap2.endTime === 0) {
       import('../utils/toast.js').then(({ showToast }) => {
-        showToast('Laps merged successfully.', 'success');
+        showToast('Cannot merge with the currently running lap. Finish or lap it first.', 'warning');
       });
+      return;
+    }
 
-      return newLaps;
+    // Determine which is chronologically earlier (higher index = older in newest-first array)
+    const olderLap = idx1 > idx2 ? lap1 : lap2;
+    const newerLap = idx1 > idx2 ? lap2 : lap1;
+    const olderIdx = Math.max(idx1, idx2);
+    const newerIdx = Math.min(idx1, idx2);
+
+    // Merge times
+    const totalSeconds = olderLap.getTotalTimeInSecondsRaw() + newerLap.getTotalTimeInSecondsRaw();
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+
+    // Merge work done strings
+    const workParts = [olderLap.workDoneString, newerLap.workDoneString].filter(Boolean);
+    const mergedWork = workParts.join('\n');
+
+    // Create merged lap with older's start and newer's end
+    const mergedLap = new WorkLap(
+      olderLap.startTime,
+      newerLap.endTime,
+      h, m, s,
+      mergedWork,
+      olderLap.HourlyAmount,
+      uuidv4()
+    );
+    mergedLap.setIsBreakLap(olderLap.isBreakLap && newerLap.isBreakLap);
+
+    // Remove both and insert merged at the newer position
+    const newLaps = prevLaps.filter((_, i) => i !== olderIdx && i !== newerIdx);
+    newLaps.splice(newerIdx, 0, mergedLap);
+    lapsRef.current = newLaps;
+    setLaps(newLaps);
+
+    import('../utils/toast.js').then(({ showToast }) => {
+      showToast('Laps merged successfully.', 'success');
     });
   }, []);
 
@@ -399,12 +527,13 @@ const LapProvider = ({ children }) => {
 
   // function to update the end time for a lap
   const updateEndTime = (lapId, endTime) => {
-    const newLaps = laps.map((lap) => {
+    const newLaps = lapsRef.current.map((lap) => {
       if (lap.id === lapId) {
         lap.setEndTime(endTime);
       }
       return lap;
     });
+    lapsRef.current = newLaps;
     setLaps(newLaps);
   };
 
@@ -417,10 +546,11 @@ const LapProvider = ({ children }) => {
         breaksImpactTime,
         setBreaksImpactAmount,
         setBreaksImpactTime,
-        setLaps,
+        setLaps: replaceLaps,
         addLap,
         resetLaps,
         updateLap,
+        flushActiveLapTime,
         getFirstLap,
         getLapFromId,
         updateWorkDoneByID,
@@ -453,10 +583,6 @@ const LapProvider = ({ children }) => {
         setIsPlaying,
         started,
         setStarted,
-        clearTimer,
-        setClearTimer,
-        clearLapTimer,
-        setClearLapTimer,
         activeLapId,
         setActiveLapId,
       }}
@@ -464,6 +590,10 @@ const LapProvider = ({ children }) => {
       {children}
     </LapContext.Provider>
   );
+};
+
+LapProvider.propTypes = {
+  children: PropTypes.node.isRequired,
 };
 
 export default LapProvider;

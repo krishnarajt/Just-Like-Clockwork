@@ -1,77 +1,138 @@
-// Session storage utility
-// Manages work sessions saved to localStorage
-// Will be replaced with API calls to a backend later
+// Session storage utility.
+// Local sessions use the same UUID that the backend stores as sessionUuid.
 
 import { v4 as uuidv4 } from 'uuid';
 
 const SESSIONS_KEY = 'clockwork_sessions';
 
+export function getDefaultSessionName(createdAt = new Date().toISOString()) {
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return 'Session';
+  return `Session ${date.toLocaleDateString()}`;
+}
+
+export function serializeLaps(laps = []) {
+  return laps.map((lap) => ({
+    id: lap.id,
+    startTime: lap.startTime,
+    endTime: lap.endTime,
+    current_hours: Number(lap.current_hours || 0),
+    current_minutes: Number(lap.current_minutes || 0),
+    current_seconds: Number(lap.current_seconds || 0),
+    workDoneString: lap.workDoneString || '',
+    isBreakLap: Boolean(lap.isBreakLap),
+    HourlyAmount: Number(lap.HourlyAmount || 0),
+  }));
+}
+
+export function getLapDurationSeconds(lap) {
+  return (
+    Number(lap.current_hours || 0) * 3600 +
+    Number(lap.current_minutes || 0) * 60 +
+    Number(lap.current_seconds || 0)
+  );
+}
+
+export function calculateSessionTotals(laps = []) {
+  let totalSeconds = 0;
+  let totalAmount = 0;
+
+  laps.forEach((lap) => {
+    const seconds = getLapDurationSeconds(lap);
+    totalSeconds += seconds;
+    if (typeof lap.getAmount === 'function') {
+      totalAmount += Number(lap.getAmount() || 0);
+    } else {
+      totalAmount += Number(lap.HourlyAmount || 0) * (seconds / 3600);
+    }
+  });
+
+  return {
+    totalSeconds,
+    totalAmount: Math.round(totalAmount * 1000) / 1000,
+  };
+}
+
+function normalizeStoredSession(session) {
+  const laps = Array.isArray(session.laps) ? session.laps : [];
+  const totals = calculateSessionTotals(laps);
+  const createdAt = session.createdAt || new Date().toISOString();
+  const id = session.id || session.sessionUuid || uuidv4();
+
+  return {
+    ...session,
+    id,
+    sessionUuid: session.sessionUuid || id,
+    createdAt,
+    sessionName: session.sessionName || getDefaultSessionName(createdAt),
+    description: session.description || '',
+    startTime: session.startTime || (laps.length > 0 ? laps[laps.length - 1].startTime : createdAt),
+    endTime: session.endTime || null,
+    lapCount: Number(session.lapCount ?? laps.length),
+    totalSeconds: Number(session.totalSeconds ?? totals.totalSeconds),
+    totalAmount: Number(session.totalAmount ?? totals.totalAmount),
+    isCompleted: session.isCompleted ?? true,
+    laps,
+  };
+}
+
+function writeSessions(sessions) {
+  localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions.map(normalizeStoredSession)));
+}
+
 /**
- * Get all saved sessions from localStorage
+ * Get all saved sessions from localStorage.
  * @returns {Array} Array of session objects
  */
 export function getSessions() {
   try {
     const data = localStorage.getItem(SESSIONS_KEY);
-    return data ? JSON.parse(data) : [];
+    if (!data) return [];
+    const sessions = JSON.parse(data);
+    if (!Array.isArray(sessions)) return [];
+    return sessions.map(normalizeStoredSession);
   } catch {
     return [];
   }
 }
 
 /**
- * Save a new session
- * @param {object} session - Session object with laps data
- * @returns {string} The session ID
+ * Save a completed session.
+ * @param {Array} laps - WorkLap instances or serialized lap objects
+ * @param {object} options - Optional session metadata, including id/sessionUuid
+ * @returns {string} The stable local/cloud session UUID
  */
-export function saveSession(laps) {
+export function saveSession(laps, options = {}) {
   const sessions = getSessions();
+  const serializedLaps = serializeLaps(laps);
+  const totals = calculateSessionTotals(laps);
+  const createdAt = options.createdAt || new Date().toISOString();
+  const sessionId = options.id || options.sessionUuid || uuidv4();
+  const existing = sessions.find((s) => s.id === sessionId || s.sessionUuid === sessionId);
 
-  // Serialize laps to plain objects
-  const serializedLaps = laps.map((lap) => ({
-    id: lap.id,
-    startTime: lap.startTime,
-    endTime: lap.endTime,
-    current_hours: lap.current_hours,
-    current_minutes: lap.current_minutes,
-    current_seconds: lap.current_seconds,
-    workDoneString: lap.workDoneString,
-    isBreakLap: lap.isBreakLap,
-    HourlyAmount: lap.HourlyAmount,
-  }));
-
-  // Calculate total time
-  let totalSeconds = 0;
-  laps.forEach((lap) => {
-    totalSeconds +=
-      (lap.current_hours || 0) * 3600 +
-      (lap.current_minutes || 0) * 60 +
-      (lap.current_seconds || 0);
-  });
-
-  // Calculate total amount
-  let totalAmount = 0;
-  laps.forEach((lap) => {
-    if (typeof lap.getAmount === 'function') {
-      totalAmount += lap.getAmount();
-    }
-  });
-
-  const session = {
-    id: uuidv4(),
-    createdAt: new Date().toISOString(),
-    startTime: laps.length > 0 ? laps[laps.length - 1].startTime : null, // Oldest lap (last in reversed array)
-    endTime: new Date().toLocaleString(),
-    lapCount: laps.length,
-    totalSeconds,
-    totalAmount: Math.round(totalAmount * 100) / 100,
+  const session = normalizeStoredSession({
+    ...(existing || {}),
+    id: sessionId,
+    sessionUuid: sessionId,
+    createdAt: existing?.createdAt || createdAt,
+    sessionName: options.sessionName || existing?.sessionName || getDefaultSessionName(createdAt),
+    description: options.description ?? existing?.description ?? '',
+    startTime:
+      options.startTime ||
+      existing?.startTime ||
+      (serializedLaps.length > 0 ? serializedLaps[serializedLaps.length - 1].startTime : createdAt),
+    endTime: options.endTime || new Date().toISOString(),
+    lapCount: serializedLaps.length,
+    totalSeconds: totals.totalSeconds,
+    totalAmount: totals.totalAmount,
+    isCompleted: true,
     laps: serializedLaps,
-  };
+  });
 
-  sessions.unshift(session); // Add newest first
+  const nextSessions = [session, ...sessions.filter((s) => s.id !== sessionId && s.sessionUuid !== sessionId)];
 
   try {
-    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+    writeSessions(nextSessions);
   } catch (e) {
     console.warn('Failed to save session to localStorage:', e);
   }
@@ -80,28 +141,41 @@ export function saveSession(laps) {
 }
 
 /**
- * Delete a session by ID
+ * Patch a saved session in localStorage.
  * @param {string} sessionId
+ * @param {object|Function} updates
  */
-export function deleteSession(sessionId) {
+export function updateSession(sessionId, updates) {
   const sessions = getSessions();
-  const filtered = sessions.filter((s) => s.id !== sessionId);
-  localStorage.setItem(SESSIONS_KEY, JSON.stringify(filtered));
+  const nextSessions = sessions.map((session) => {
+    if (session.id !== sessionId && session.sessionUuid !== sessionId) return session;
+    const patch = typeof updates === 'function' ? updates(session) : updates;
+    return normalizeStoredSession({ ...session, ...patch });
+  });
+  writeSessions(nextSessions);
 }
 
 /**
- * Clear all sessions
+ * Delete a session by ID.
+ * @param {string} sessionId
+ */
+export function deleteSession(sessionId) {
+  const filtered = getSessions().filter((s) => s.id !== sessionId && s.sessionUuid !== sessionId);
+  writeSessions(filtered);
+}
+
+/**
+ * Clear all sessions.
  */
 export function clearAllSessions() {
   localStorage.removeItem(SESSIONS_KEY);
 }
 
 /**
- * Get a single session by ID
+ * Get a single session by ID.
  * @param {string} sessionId
  * @returns {object|null}
  */
 export function getSessionById(sessionId) {
-  const sessions = getSessions();
-  return sessions.find((s) => s.id === sessionId) || null;
+  return getSessions().find((s) => s.id === sessionId || s.sessionUuid === sessionId) || null;
 }

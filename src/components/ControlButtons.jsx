@@ -19,12 +19,11 @@ import {
   syncCurrentSessionToBackend,
   clearLiveSessionState,
   syncSessionToBackend,
+  getLiveSessionUuid,
 } from '../utils/apiClient';
 import { showToast } from '../utils/toast';
 
 export default function ControlButtons({
-  setClearLapTimer,
-  setClearTimer,
   lap,
   started,
   setStarted,
@@ -36,12 +35,12 @@ export default function ControlButtons({
   const { loggedIn, backendOnline } = useContext(AuthContext);
 
   const addNewLap = () => {
-    const currentDate = new Date().toLocaleString();
+    const currentDate = new Date().toISOString();
     const newlap = new WorkLap(currentDate, 0, 0, 0, 0, '', 0);
     addLap(newlap);
     return newlap.id;
   };
-  const { laps, addLap, resetLaps, getLapFromId, updateEndTime } = useContext(LapContext);
+  const { laps, addLap, resetLaps, getLapFromId, updateEndTime, flushActiveLapTime } = useContext(LapContext);
 
   // Sync current session to backend (manual sync button)
   const handleSyncCurrentSession = async () => {
@@ -69,8 +68,9 @@ export default function ControlButtons({
             (getLapFromId(lap)?.getCurrentHours() === 0 && getLapFromId(lap)?.getCurrentMinutes() === 0)
           }
           onClick={() => {
+            flushActiveLapTime(lap);
             // End the current lap
-            updateEndTime(lap, new Date().toLocaleString());
+            updateEndTime(lap, new Date().toISOString());
 
             // Sync the just-completed lap to backend (non-blocking)
             if (isLoggedIn()) {
@@ -95,7 +95,6 @@ export default function ControlButtons({
             setIsPlaying(false);
             const new_lap_id = addNewLap();
             setLap(new_lap_id);
-            setClearLapTimer(true);
             setTimeout(() => {
               setIsPlaying(true);
             }, 500);
@@ -116,6 +115,9 @@ export default function ControlButtons({
         <button
           disabled={!started}
           onClick={() => {
+            if (isPlaying) {
+              flushActiveLapTime(lap);
+            }
             setTimeout(() => {
               setIsPlaying(!isPlaying);
             }, 100);
@@ -165,16 +167,16 @@ export default function ControlButtons({
               onClick={() => {
                 // End the current lap and save the session before clearing
                 if (laps.length > 0) {
-                  updateEndTime(lap, new Date().toLocaleString());
-                  const sessionId = saveSession(laps);
+                  flushActiveLapTime(lap);
+                  updateEndTime(lap, new Date().toISOString());
+                  const sessionId = saveSession(laps, { id: getLiveSessionUuid() || undefined });
+                  const savedSession = getSessions().find((s) => s.id === sessionId);
 
                   // If logged in, complete the live session on backend (non-blocking)
                   if (isLoggedIn()) {
-                    completeLiveSession(laps).then((backendId) => {
+                    completeLiveSession(laps, savedSession).then((backendId) => {
                       if (!backendId) {
                         // Fallback: sync as a completed session the old way
-                        const sessions = getSessions();
-                        const savedSession = sessions.find((s) => s.id === sessionId);
                         if (savedSession) {
                           syncSessionToBackend(savedSession).catch(() => {
                             console.log('[Sync] Session queued for later sync');
@@ -183,20 +185,19 @@ export default function ControlButtons({
                       }
                     }).catch(() => {
                       console.log('[Sync] Live session completion failed, trying fallback');
-                      const sessions = getSessions();
-                      const savedSession = sessions.find((s) => s.id === sessionId);
                       if (savedSession) {
                         syncSessionToBackend(savedSession).catch(() => {});
                       }
+                    }).finally(() => {
+                      clearLiveSessionState();
                     });
                   }
                 }
                 // Stop the live session sync
                 stopLiveSessionSync();
-                clearLiveSessionState();
+                if (!isLoggedIn()) clearLiveSessionState();
                 setStarted(false);
                 setIsPlaying(false);
-                setClearTimer(true);
                 resetLaps();
               }}
             />
@@ -229,8 +230,6 @@ export default function ControlButtons({
 
 // props validation
 ControlButtons.propTypes = {
-  setClearLapTimer: PropTypes.func.isRequired,
-  setClearTimer: PropTypes.func.isRequired,
   lap: PropTypes.string.isRequired,
   started: PropTypes.bool.isRequired,
   setStarted: PropTypes.func.isRequired,
