@@ -32,7 +32,7 @@ test('saveSession can reuse a live session UUID for cloud identity', () => {
   assert.equal(sessions[0].lapCount, 1);
   assert.equal(sessions[0].totalSeconds, 600);
   assert.equal(sessions[0].totalAmount, 10);
-  assert.ok(sessions[0].sessionName.startsWith('Session '));
+  assert.match(sessions[0].sessionName, /^Session .*\d{2}:\d{2}/);
 });
 
 test('updateSession persists local name edits', () => {

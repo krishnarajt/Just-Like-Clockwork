@@ -2,9 +2,9 @@
 // These work with plain session objects (not WorkLap instances)
 
 import { saveAs } from 'file-saver';
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { escapeCSVField } from '../../utils/csvUtils';
+import { saveReceiptPdf } from './pdfReceipt';
+import { formatLocalDateTime } from '../../utils/timeFormat';
 
 /**
  * Generate CSV string from a session's laps (plain objects)
@@ -63,75 +63,22 @@ export function exportSessionJSON(session) {
  * Export a single session as PDF
  * @param {object} session - Session object from sessionStore
  */
-export function exportSessionPDF(session) {
-  const doc = new jsPDF();
+export async function exportSessionPDF(session) {
+  const createdAt = session.createdAt || session.created_at || new Date().toISOString();
+  const fileDateStr = new Date(createdAt).toISOString().split('T')[0];
 
-  // Title
-  const dateStr = new Date(session.createdAt).toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
+  await saveReceiptPdf({
+    session,
+    laps: session.laps || [],
+    title: session.sessionName || 'Session Receipt',
+    subtitle: session.description || '',
+    totals: {
+      totalAmount: session.totalAmount ?? session.total_amount,
+      totalSeconds: session.totalSeconds ?? session.total_seconds ?? session.totalDuration ?? session.total_duration,
+      totalLaps: session.lapCount ?? session.lap_count,
+    },
+    filename: `session_${fileDateStr}.pdf`,
   });
-  doc.setFontSize(16);
-  doc.setFont(undefined, 'bold');
-  doc.text(`Session - ${dateStr}`, 14, 20);
-  doc.setFont(undefined, 'normal');
-  doc.setFontSize(11);
-  doc.text(`Laps: ${session.lapCount}   |   Duration: ${formatDuration(session.totalSeconds)}   |   Earned: ₹${session.totalAmount.toFixed(2)}`, 14, 28);
-
-  // Table columns
-  const columns = [
-    '#',
-    'Start Time',
-    'End Time',
-    'Hours',
-    'Minutes',
-    'Seconds',
-    'Work Done',
-    'Break',
-    'Hourly Amount',
-  ];
-
-  // Reverse to chronological order
-  const chronologicalLaps = [...session.laps].reverse();
-
-  const rows = chronologicalLaps.map((lap, index) => [
-    (index + 1).toString(),
-    typeof lap.startTime === 'string' ? lap.startTime : '—',
-    lap.endTime === 0 ? 'DNF' : (typeof lap.endTime === 'string' ? lap.endTime : '—'),
-    lap.current_hours || 0,
-    lap.current_minutes || 0,
-    lap.current_seconds || 0,
-    lap.workDoneString || '',
-    lap.isBreakLap ? 'Yes' : 'No',
-    lap.HourlyAmount || 0,
-  ]);
-
-  autoTable(doc, {
-    startY: 34,
-    head: [columns],
-    body: rows,
-    foot: [[
-      session.lapCount,
-      'Total',
-      '',
-      '',
-      Math.round(session.totalSeconds / 60),
-      '',
-      '',
-      '',
-      session.totalAmount.toFixed(2),
-    ]],
-    footStyles: { fillColor: [41, 128, 185], textColor: 255 },
-    styles: { fontSize: 8 },
-    headStyles: { fontSize: 9 },
-  });
-
-  const fileDateStr = new Date(session.createdAt).toISOString().split('T')[0];
-  doc.save(`session_${fileDateStr}.pdf`);
 }
 
 /**
@@ -186,69 +133,44 @@ export function exportAllSessionsJSON(sessions) {
  * Export ALL sessions as a single PDF
  * @param {Array} sessions - Array of session objects
  */
-export function exportAllSessionsPDF(sessions) {
-  const doc = new jsPDF();
-
-  doc.setFontSize(18);
-  doc.setFont(undefined, 'bold');
-  doc.text('All Sessions Report', 14, 20);
-  doc.setFont(undefined, 'normal');
-  doc.setFontSize(11);
-  doc.text(`Total sessions: ${sessions.length}`, 14, 28);
-
-  let startY = 36;
+export async function exportAllSessionsPDF(sessions) {
+  const allLaps = [];
+  let totalSeconds = 0;
+  let totalAmount = 0;
+  let totalLaps = 0;
 
   sessions.forEach((session, sIdx) => {
-    const dateStr = new Date(session.createdAt).toLocaleDateString('en-GB', {
-      day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true,
+    const sessionLabel = session.sessionName || `Session ${sIdx + 1}`;
+    const sessionDate = formatLocalDateTime(session.createdAt || session.startTime);
+    const laps = Array.isArray(session.laps) ? session.laps : [];
+
+    totalSeconds += Number(session.totalSeconds ?? session.total_seconds ?? session.totalDuration ?? session.total_duration ?? 0);
+    totalAmount += Number(session.totalAmount ?? session.total_amount ?? 0);
+    totalLaps += Number(session.lapCount ?? session.lap_count ?? laps.length);
+
+    laps.forEach((lap) => {
+      const workDone = lap.workDoneString || lap.work_done_string || lap.lapName || lap.lap_name || '';
+      allLaps.push({
+        ...lap,
+        lapName: undefined,
+        lap_name: undefined,
+        workDoneString: `${sessionLabel} (${sessionDate})${workDone ? `: ${workDone}` : ''}`,
+      });
     });
-
-    // Check if we need a new page for the session header
-    if (startY > doc.internal.pageSize.getHeight() - 40) {
-      doc.addPage();
-      startY = 20;
-    }
-
-    doc.setFontSize(12);
-    doc.setFont(undefined, 'bold');
-    doc.text(`Session ${sIdx + 1} — ${dateStr}`, 14, startY);
-    doc.setFont(undefined, 'normal');
-    doc.setFontSize(9);
-    doc.text(`${session.lapCount} laps  |  ${formatDuration(session.totalSeconds)}  |  ₹${session.totalAmount.toFixed(2)}`, 14, startY + 6);
-
-    const columns = ['#', 'Start', 'End', 'H', 'M', 'S', 'Work Done', 'Break', '₹/hr'];
-    const chronologicalLaps = [...session.laps].reverse();
-    const rows = chronologicalLaps.map((lap, i) => [
-      (i + 1).toString(),
-      typeof lap.startTime === 'string' ? lap.startTime : '—',
-      lap.endTime === 0 ? 'DNF' : (typeof lap.endTime === 'string' ? lap.endTime : '—'),
-      lap.current_hours || 0,
-      lap.current_minutes || 0,
-      lap.current_seconds || 0,
-      lap.workDoneString || '',
-      lap.isBreakLap ? 'Yes' : 'No',
-      lap.HourlyAmount || 0,
-    ]);
-
-    const tableResult = autoTable(doc, {
-      startY: startY + 10,
-      head: [columns],
-      body: rows,
-      styles: { fontSize: 7 },
-      headStyles: { fontSize: 8 },
-      margin: { left: 14, right: 14 },
-    });
-
-    startY = (tableResult?.finalY ?? doc.lastAutoTable?.finalY ?? startY + 40) + 12;
   });
 
-  doc.save('all_sessions.pdf');
-}
-
-// Helper
-function formatDuration(totalSeconds) {
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  return `${h}h ${m}m ${s}s`;
+  await saveReceiptPdf({
+    session: {
+      sessionName: 'All Sessions Receipt',
+      description: `${sessions.length} sessions exported together`,
+      createdAt: new Date().toISOString(),
+    },
+    laps: allLaps,
+    totals: {
+      totalAmount,
+      totalSeconds,
+      totalLaps,
+    },
+    filename: 'all_sessions_receipt.pdf',
+  });
 }

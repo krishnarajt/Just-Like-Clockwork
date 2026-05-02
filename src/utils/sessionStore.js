@@ -2,13 +2,12 @@
 // Local sessions use the same UUID that the backend stores as sessionUuid.
 
 import { v4 as uuidv4 } from 'uuid';
+import { formatSessionNameDateTime } from './timeFormat.js';
 
 const SESSIONS_KEY = 'clockwork_sessions';
 
 export function getDefaultSessionName(createdAt = new Date().toISOString()) {
-  const date = new Date(createdAt);
-  if (Number.isNaN(date.getTime())) return 'Session';
-  return `Session ${date.toLocaleDateString()}`;
+  return `Session ${formatSessionNameDateTime(createdAt)}`;
 }
 
 export function serializeLaps(laps = []) {

@@ -36,7 +36,7 @@ export default function ImageAttachment({ lapId }) {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const maxDim = 800;
+        const maxDim = 1600;
         let w = img.width;
         let h = img.height;
         if (w > maxDim || h > maxDim) {
@@ -52,7 +52,7 @@ export default function ImageAttachment({ lapId }) {
         canvas.height = h;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, w, h);
-        const compressed = canvas.toDataURL('image/jpeg', 0.7);
+        const compressed = canvas.toDataURL('image/jpeg', 0.92);
         addImage(lapId, compressed);
         setImages(getImages(lapId));
       };
@@ -95,7 +95,7 @@ export default function ImageAttachment({ lapId }) {
     canvas.height = videoRef.current.videoHeight;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(videoRef.current, 0, 0);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
     addImage(lapId, dataUrl);
     setImages(getImages(lapId));
     stopCamera();

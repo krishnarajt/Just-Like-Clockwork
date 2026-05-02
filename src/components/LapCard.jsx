@@ -35,7 +35,7 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
           const img = new Image();
           img.onload = () => {
             const canvas = document.createElement('canvas');
-            const maxDim = 800;
+            const maxDim = 1600;
             let w = img.width;
             let h = img.height;
             if (w > maxDim || h > maxDim) {
@@ -45,7 +45,7 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
             canvas.width = w;
             canvas.height = h;
             canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-            const compressed = canvas.toDataURL('image/jpeg', 0.7);
+            const compressed = canvas.toDataURL('image/jpeg', 0.92);
             addImage(lap.getId(), compressed);
             // Force re-render by triggering a minor state change
             updateWorkDoneByID(lap.getId(), lap.getWorkDoneString());
@@ -95,7 +95,7 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
           : 'border-base-300 bg-base-200/30 hover:bg-base-200/60'
       }`}>
         {/* Header row: index, time info, break toggle */}
-        <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3 mb-3">
           {/* Left: index and day/date */}
           <div className="flex items-center gap-3">
             <div className="text-2xl font-bold text-primary min-w-[2rem] text-center">
@@ -112,19 +112,18 @@ function LapCard({ lap, index, totalLaps, updateWorkDoneByID, isFirst, isLast })
           </div>
 
           {/* Center: time info */}
-          <div className="flex items-center gap-4 text-sm">
-            <div className="flex flex-col items-center">
+          <div className="grid grid-cols-3 gap-3 text-sm min-w-0">
+            <div className="flex flex-col items-center rounded-lg bg-base-100/60 px-3 py-2 min-w-0">
               <span className="text-base-content/50 text-xs">Start</span>
-              <span className="font-medium">{lap.getStartTimeDateFormatted()}</span>
+              <span className="font-medium tabular-nums whitespace-nowrap">{lap.getStartTimeDateFormatted()}</span>
             </div>
-            <span className="text-base-content/30">→</span>
-            <div className="flex flex-col items-center">
+            <div className="flex flex-col items-center rounded-lg bg-base-100/60 px-3 py-2 min-w-0">
               <span className="text-base-content/50 text-xs">End</span>
-              <span className="font-medium">{lap.getEndTimeDateFormatted()}</span>
+              <span className="font-medium tabular-nums whitespace-nowrap">{lap.getEndTimeDateFormatted()}</span>
             </div>
-            <div className="flex flex-col items-center">
+            <div className="flex flex-col items-center rounded-lg bg-base-100/60 px-3 py-2 min-w-0">
               <span className="text-base-content/50 text-xs">Duration</span>
-              <span className="font-bold text-secondary tabular-nums">
+              <span className="font-bold text-secondary tabular-nums whitespace-nowrap">
                 {lap.getCurrentHours()}h {lap.getCurrentMinutes()}m {lap.getCurrentSeconds()}s
               </span>
             </div>

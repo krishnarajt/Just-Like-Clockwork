@@ -25,10 +25,69 @@ export function saveImages(lapId, images) {
 export function getImages(lapId) {
   try {
     const data = localStorage.getItem(IMAGE_PREFIX + lapId);
-    return data ? JSON.parse(data) : [];
+    const images = data ? JSON.parse(data) : [];
+    return dedupeImageSources(Array.isArray(images) ? images : []);
   } catch {
     return [];
   }
+}
+
+export function getImageUrl(image) {
+  if (!image) return '';
+  if (typeof image === 'string') return image;
+  return image.url || image.presignedUrl || image.presigned_url || '';
+}
+
+export function getImageName(image) {
+  if (!image || typeof image === 'string') return '';
+  return image.imageName || image.image_name || image.name || image.filename || '';
+}
+
+export function getImageFingerprint(image) {
+  const url = getImageUrl(image);
+  if (!url) return '';
+
+  if (url.startsWith('data:')) {
+    return `${url.length}:${url.slice(0, 96)}:${url.slice(-96)}`;
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    parsedUrl.search = '';
+    parsedUrl.hash = '';
+    return parsedUrl.toString();
+  } catch {
+    return url.split('?')[0];
+  }
+}
+
+export function dedupeImageSources(images = []) {
+  const seen = new Set();
+  return images.filter((image) => {
+    const url = getImageUrl(image);
+    if (!url) return false;
+
+    const fingerprint = getImageFingerprint(url);
+    if (seen.has(fingerprint)) return false;
+    seen.add(fingerprint);
+    return true;
+  });
+}
+
+export function mergeLapImageSources(lapId, backendImages = []) {
+  const localImages = getImages(String(lapId));
+  const backendSources = Array.isArray(backendImages) ? backendImages : [];
+  const uploadedLocalPrefix = `lap_${lapId}_img_`;
+
+  const filteredBackendImages = backendSources
+    .filter((image) => {
+      if (localImages.length === 0) return true;
+      return !getImageName(image).startsWith(uploadedLocalPrefix);
+    })
+    .map(getImageUrl)
+    .filter(Boolean);
+
+  return dedupeImageSources([...localImages, ...filteredBackendImages]);
 }
 
 /**
@@ -46,10 +105,16 @@ export function deleteImages(lapId) {
  */
 export function addImage(lapId, base64Image) {
   const images = getImages(lapId);
+  const fingerprint = getImageFingerprint(base64Image);
+  if (fingerprint && images.some((image) => getImageFingerprint(image) === fingerprint)) {
+    return;
+  }
   images.push(base64Image);
   saveImages(lapId, images);
   // Notify any listening components (e.g. ImageAttachment) that images changed
-  window.dispatchEvent(new CustomEvent('clockwork-images-changed', { detail: { lapId } }));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('clockwork-images-changed', { detail: { lapId } }));
+  }
 }
 
 /**

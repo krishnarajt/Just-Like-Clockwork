@@ -128,7 +128,7 @@ export default function Navbar() {
   };
 
   const handleExportPDF = async () => {
-    exportPDF(laps, getTotalAmountSum(), getTotalTimeSpent(), laps.length);
+    await exportPDF(laps, getTotalAmountSum(), getTotalTimeSpent(), laps.length);
   };
 
   const handleExportBrowser = async () => {

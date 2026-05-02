@@ -14,8 +14,9 @@ import {
   unmarkSessionSynced,
 } from '../utils/apiClient';
 import { AuthContext } from '../context/AuthContext';
-import { getImages, addImage, removeImage } from '../utils/imageStore';
+import { addImage, mergeLapImageSources, getImages, removeImage } from '../utils/imageStore';
 import { mergeLocalAndBackendSessions } from '../utils/sessionMerge';
+import { formatDuration, formatLocalDateTime } from '../utils/timeFormat';
 import {
   exportSessionCSV,
   exportSessionJSON,
@@ -100,10 +101,7 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
       const lapId = lap.lapUuid || lap.lap_uuid || lap.id;
       if (lapId) {
         // For local sessions, load from localStorage
-        const localImgs = getImages(String(lapId));
-        // For backend sessions, images come as part of lap data
-        const backendImgs = (lap.images || []).map((img) => img.url || img.presignedUrl).filter(Boolean);
-        imgMap[lapId] = [...localImgs, ...backendImgs];
+        imgMap[lapId] = mergeLapImageSources(lapId, lap.images || []);
       }
     });
     setLocalLapImages(imgMap);
@@ -119,7 +117,7 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const maxDim = 800;
+        const maxDim = 1600;
         let w = img.width, h = img.height;
         if (w > maxDim || h > maxDim) {
           if (w > h) { h = (h / w) * maxDim; w = maxDim; }
@@ -127,19 +125,21 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
         }
         canvas.width = w; canvas.height = h;
         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        const compressed = canvas.toDataURL('image/jpeg', 0.7);
+        const compressed = canvas.toDataURL('image/jpeg', 0.92);
 
         // Save to localStorage
         addImage(String(lapId), compressed);
+        const localImagesAfterSave = getImages(String(lapId));
         // Update local state
         setLocalLapImages((prev) => ({
           ...prev,
-          [lapId]: [...(prev[lapId] || []), compressed],
+          [lapId]: localImagesAfterSave,
         }));
 
         // If backend session, also upload to backend
         if (session._backendId && backendLapId) {
-          uploadImageToBackend(session._backendId, backendLapId, compressed, `image_${Date.now()}.jpg`).catch(() => {
+          const localImageIndex = localImagesAfterSave.length - 1;
+          uploadImageToBackend(session._backendId, backendLapId, compressed, `lap_${lapId}_img_${localImageIndex}.jpg`).catch(() => {
             console.warn('[Sessions] Failed to upload image to backend');
           });
         }
@@ -162,13 +162,6 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
       imgs.splice(index, 1);
       return { ...prev, [lapId]: imgs };
     });
-  };
-
-  const formatDuration = (totalSeconds) => {
-    const h = Math.floor(totalSeconds / 3600);
-    const m = Math.floor((totalSeconds % 3600) / 60);
-    const s = Math.round(totalSeconds % 60);
-    return `${h}h ${m}m ${s}s`;
   };
 
   // Normalize lap for display
@@ -224,9 +217,9 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-3">
                     <span className="text-xl font-bold text-primary">{i + 1}</span>
-                    <span className="text-sm text-base-content/60">{typeof lap.startTime === 'string' ? lap.startTime : '—'}</span>
+                    <span className="text-sm text-base-content/60">{formatLocalDateTime(lap.startTime)}</span>
                     <span className="text-base-content/30">→</span>
-                    <span className="text-sm text-base-content/60">{lap.endTime === 0 ? 'Running' : (typeof lap.endTime === 'string' ? lap.endTime : '—')}</span>
+                    <span className="text-sm text-base-content/60">{lap.endTime === 0 ? 'Running' : formatLocalDateTime(lap.endTime)}</span>
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="font-bold text-secondary tabular-nums text-sm">{formatDuration(totalSec)}</span>
@@ -496,6 +489,41 @@ export default function Sessions() {
     setSyncingId(null);
   };
 
+  const loadSessionForExport = async (session) => {
+    if (!session._backendId) return session;
+
+    let laps = expandedLaps[session.id] || session.laps || [];
+    if (!laps || laps.length === 0) {
+      const detail = await fetchSessionDetail(session._backendId);
+      if (detail?.laps?.length) {
+        laps = detail.laps;
+      } else {
+        const result = await fetchSessionLaps(session._backendId);
+        if (Array.isArray(result)) laps = result;
+        else if (result?.laps) laps = result.laps;
+      }
+    }
+
+    if (laps?.length) {
+      setExpandedLaps((prev) => ({ ...prev, [session.id]: laps }));
+    }
+
+    return { ...session, laps: laps || [] };
+  };
+
+  const handleExportSessionPDF = async (session) => {
+    const exportSession = await loadSessionForExport(session);
+    await exportSessionPDF(exportSession);
+  };
+
+  const handleExportAllPDF = async () => {
+    const sessionsForExport = [];
+    for (const session of mergedSessions) {
+      sessionsForExport.push(await loadSessionForExport(session));
+    }
+    await exportAllSessionsPDF(sessionsForExport);
+  };
+
   const handleSyncAll = async () => {
     if (!loggedIn) return;
     for (const session of localSessions) {
@@ -518,22 +546,8 @@ export default function Sessions() {
 
   const handleClearAll = () => { clearAllSessions(); setLocalSessions([]); setShowConfirmClear(false); };
 
-  const formatDuration = (totalSeconds) => {
-    const h = Math.floor(totalSeconds / 3600);
-    const m = Math.floor((totalSeconds % 3600) / 60);
-    const s = Math.round(totalSeconds % 60);
-    return `${h}h ${m}m ${s}s`;
-  };
-
   const formatDate = (isoString) => {
-    try {
-      const d = new Date(isoString);
-      if (isNaN(d.getTime())) return isoString || '—';
-      return new Intl.DateTimeFormat('en-GB', {
-        day: 'numeric', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata',
-      }).format(d);
-    } catch { return isoString; }
+    return formatLocalDateTime(isoString);
   };
 
   const getSessionLaps = (session) => {
@@ -612,7 +626,7 @@ export default function Sessions() {
                 <ul tabIndex={0} className="dropdown-content menu bg-base-100 rounded-box z-[50] w-40 p-2 shadow-lg border border-base-300">
                   <li><a onClick={() => exportAllSessionsCSV(mergedSessions)}>CSV</a></li>
                   <li><a onClick={() => exportAllSessionsJSON(mergedSessions)}>JSON</a></li>
-                  <li><a onClick={() => exportAllSessionsPDF(mergedSessions)}>PDF</a></li>
+                  <li><a onClick={handleExportAllPDF}>PDF</a></li>
                 </ul>
               </div>
               {showConfirmClear ? (
@@ -722,7 +736,7 @@ export default function Sessions() {
                           <ul tabIndex={0} className="dropdown-content menu bg-base-100 rounded-box z-[50] w-32 p-2 shadow-lg border border-base-300">
                             <li><a onClick={() => exportSessionCSV(session)}>CSV</a></li>
                             <li><a onClick={() => exportSessionJSON(session)}>JSON</a></li>
-                            <li><a onClick={() => exportSessionPDF(session)}>PDF</a></li>
+                            <li><a onClick={() => handleExportSessionPDF(session)}>PDF</a></li>
                           </ul>
                         </div>
                         {/* Delete */}
@@ -766,16 +780,13 @@ export default function Sessions() {
                                 {displayLaps.map((rawLap, i) => {
                                   const lap = normalizeLap(rawLap, session._source);
                                   const totalSec = (lap.current_hours || 0) * 3600 + (lap.current_minutes || 0) * 60 + (lap.current_seconds || 0);
-                                  // Combine local images + backend presigned URL images
-                                  const localImgs = getImages(String(lap.id));
-                                  const backendImgs = (lap.images || []).map((img) => img.url || img.presignedUrl).filter(Boolean);
-                                  const allImages = [...localImgs, ...backendImgs];
+                                  const allImages = mergeLapImageSources(lap.id, lap.images || []);
 
                                   return (
                                     <tr key={lap.id || i} className="text-sm">
                                       <td className="font-medium">{i + 1}</td>
-                                      <td className="text-base-content/70">{typeof lap.startTime === 'string' ? lap.startTime : '—'}</td>
-                                      <td className="text-base-content/70">{lap.endTime === 0 ? 'DNF' : (typeof lap.endTime === 'string' ? lap.endTime : '—')}</td>
+                                      <td className="text-base-content/70 whitespace-nowrap">{formatLocalDateTime(lap.startTime)}</td>
+                                      <td className="text-base-content/70 whitespace-nowrap">{lap.endTime === 0 ? 'DNF' : formatLocalDateTime(lap.endTime)}</td>
                                       <td className="font-medium text-secondary tabular-nums">{formatDuration(totalSec)}</td>
                                       <td className="max-w-xs"><div className="whitespace-pre-wrap break-words text-base-content/80">{lap.workDoneString || '—'}</div></td>
                                       <td>{lap.isBreakLap && <span className="badge badge-warning badge-sm">Break</span>}</td>

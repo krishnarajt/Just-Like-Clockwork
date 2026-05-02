@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { formatLocalDayAndDate, formatLocalTime, parseTimestamp } from '../utils/timeFormat';
 
 class WorkLap {
   constructor(
@@ -89,24 +90,15 @@ class WorkLap {
   }
 
   getStartTimeDate() {
-    return new Date(this.startTime);
+    return parseTimestamp(this.startTime) || new Date(this.startTime);
   }
 
   getEndTimeDate() {
-    return new Date(this.endTime);
+    return parseTimestamp(this.endTime) || new Date(this.endTime);
   }
 
   getStartTimeDateFormatted() {
-    const time = new Intl.DateTimeFormat('en-GB', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true,
-      timeZone: 'Asia/Kolkata',
-    })
-      .format(this.getStartTimeDate())
-      .toUpperCase();
-
-    return time;
+    return formatLocalTime(this.startTime).toUpperCase();
   }
 
   getEndTimeDateFormatted() {
@@ -114,32 +106,11 @@ class WorkLap {
       return 'DNF';
     }
 
-    const time = new Intl.DateTimeFormat('en-GB', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true,
-      timeZone: 'Asia/Kolkata',
-    })
-      .format(this.getEndTimeDate())
-      .toUpperCase();
-
-    return time;
+    return formatLocalTime(this.endTime).toUpperCase();
   }
 
   getStartDayAndDateDict() {
-    const date = this.getStartTimeDate();
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-    const formattedDate = new Intl.DateTimeFormat('en-GB', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    }).format(this.getStartTimeDate());
-
-    return {
-      day: days[date.getDay()],
-      date: formattedDate,
-    };
+    return formatLocalDayAndDate(this.startTime);
   }
 
   // Setters
