@@ -3,7 +3,16 @@
 // If the backend is down, all methods return null and log warnings — never throw or block UI
 
 import { v4 as uuidv4 } from 'uuid';
-import { calculateSessionTotals, getDefaultSessionName, serializeLaps } from './sessionStore';
+import {
+  calculateSessionTotals,
+  deleteSession,
+  getDefaultSessionName,
+  getSessions,
+  serializeLaps,
+  sessionStartFromLaps,
+} from './sessionStore.js';
+import { getBackendSessionUuid } from './sessionMerge.js';
+import { uploadedImageName } from './imageStore.js';
 
 const BASE_URL = 'https://just-like-clockwork-backend.krishnarajthadesar.in/api';
 
@@ -45,6 +54,14 @@ export function clearTokens() {
   localStorage.removeItem(REFRESH_TOKEN_KEY);
   localStorage.removeItem(USERNAME_KEY);
   localStorage.removeItem(TOKEN_EXPIRY_KEY);
+  // These record what has already been pushed, and they are only meaningful for
+  // the account that pushed it. Keeping them across a logout made a sync into a
+  // second account skip every image and session it thought it had already sent,
+  // while still reporting success.
+  localStorage.removeItem(UPLOADED_IMAGES_KEY);
+  localStorage.removeItem(SYNCED_SESSIONS_KEY);
+  localStorage.removeItem(SYNCED_SESSION_MAP_KEY);
+  clearLiveSessionState();
 }
 
 export function isLoggedIn() {
@@ -379,7 +396,8 @@ export async function syncSessionToBackend(localSession) {
     const sessionUuid = localSession.sessionUuid || localSession.id;
     const laps = Array.isArray(localSession.laps) ? localSession.laps : [];
     const totals = calculateSessionTotals(laps);
-    const sessionName = localSession.sessionName || getDefaultSessionName(localSession.createdAt);
+    const startedAt = localSession.startTime || sessionStartFromLaps(laps) || localSession.createdAt;
+    const sessionName = localSession.sessionName || getDefaultSessionName(startedAt);
     const description = localSession.description || `${laps.length} laps, ${totals.totalSeconds}s total`;
 
     const sessionResult = await authRequest('/sessions/', {
@@ -388,7 +406,7 @@ export async function syncSessionToBackend(localSession) {
         sessionUuid,
         sessionName,
         description,
-        startedAt: localSession.startTime || localSession.createdAt,
+        startedAt,
         endedAt: localSession.endTime || new Date().toISOString(),
         totalDuration: localSession.totalSeconds ?? totals.totalSeconds,
         totalAmount: localSession.totalAmount ?? totals.totalAmount,
@@ -486,6 +504,124 @@ export async function fetchBackendSessions(limit = 50, offset = 0) {
   return await authRequest(`/sessions/?limit=${limit}&offset=${offset}`);
 }
 
+// ============ Reconcile (the "Sync" button) ============
+
+/**
+ * Read a session back from the server and check it matches the local copy.
+ * This gates the local delete: without it, a write the server accepts but
+ * stores wrong would take the only copy of a session with it.
+ * Returns { ok: true } or { ok: false, reason }.
+ */
+async function verifyServerCopy(sessionUuid, localSession) {
+  const remote = await authRequest(`/sessions/${sessionUuid}`);
+  if (!remote || !remote.id) return { ok: false, reason: 'could not read it back' };
+
+  const localLaps = Array.isArray(localSession.laps) ? localSession.laps : [];
+  const remoteLaps = Array.isArray(remote.laps) ? remote.laps : [];
+  if (remoteLaps.length !== localLaps.length) {
+    return { ok: false, reason: `server has ${remoteLaps.length} laps, local has ${localLaps.length}` };
+  }
+
+  const localSeconds = calculateSessionTotals(localLaps).totalSeconds;
+  const remoteSeconds = Number(remote.totalSeconds ?? remote.totalDuration ?? NaN);
+  if (!Number.isFinite(remoteSeconds) || remoteSeconds !== localSeconds) {
+    return { ok: false, reason: `server total ${remoteSeconds}s, local total ${localSeconds}s` };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * Reconcile every local session against the server for the logged-in user.
+ *
+ * For each local session: upload it if the server does not have it, read the
+ * server copy back, and delete the local copy only once the two agree. The
+ * server is then the single source of truth and the Sessions list renders from
+ * it, so there is no second copy left to drift.
+ *
+ * Sessions that fail to upload or fail verification are deliberately KEPT
+ * locally and reported, so nothing is ever deleted on the strength of a write
+ * that might not have landed.
+ *
+ * Returns { uploaded, verified, keptLocally, problems: string[] }.
+ */
+function emptySummary() {
+  return { uploaded: 0, verified: 0, keptLocally: 0, problems: [] };
+}
+
+/**
+ * Reconcile a single local session, folding the outcome into `summary`.
+ * Pass `alreadyOnServer` when the caller has already listed the server's
+ * sessions, to skip a redundant upload.
+ */
+async function reconcileSession(localSession, summary, alreadyOnServer = false) {
+  const sessionUuid = localSession.sessionUuid || localSession.id;
+  const label = localSession.sessionName || sessionUuid;
+
+  if (!alreadyOnServer) {
+    const backendId = await syncSessionToBackend(localSession);
+    if (!backendId) {
+      summary.keptLocally += 1;
+      summary.problems.push(`"${label}" could not be uploaded, kept on this device.`);
+      return summary;
+    }
+    summary.uploaded += 1;
+  }
+
+  const verdict = await verifyServerCopy(sessionUuid, localSession);
+  if (!verdict.ok) {
+    summary.keptLocally += 1;
+    summary.problems.push(`"${label}" did not match the cloud copy (${verdict.reason}), kept on this device.`);
+    return summary;
+  }
+
+  deleteSession(sessionUuid);
+  unmarkSessionSynced(sessionUuid);
+  // Drop any queued retry too, otherwise background sync would keep pushing a
+  // stale snapshot of a session that is already confirmed in the cloud.
+  removeFromSyncQueue(sessionUuid);
+  summary.verified += 1;
+  return summary;
+}
+
+/** Reconcile one session on its own (the per-row Sync button). */
+export async function reconcileOneSession(localSession) {
+  const summary = emptySummary();
+  if (!isLoggedIn() || !localSession) {
+    summary.problems.push('Not signed in.');
+    return summary;
+  }
+  return reconcileSession(localSession, summary);
+}
+
+export async function reconcileAllSessions() {
+  const summary = emptySummary();
+
+  if (!isLoggedIn()) {
+    summary.problems.push('Not signed in.');
+    return summary;
+  }
+
+  const serverList = await fetchBackendSessions(100, 0);
+  if (!Array.isArray(serverList)) {
+    summary.problems.push('Could not list cloud sessions, so nothing was deleted locally.');
+    return summary;
+  }
+
+  const onServer = new Set();
+  serverList.forEach((s) => {
+    const uuid = getBackendSessionUuid(s);
+    if (uuid) onServer.add(uuid);
+  });
+
+  for (const localSession of getSessions()) {
+    const sessionUuid = localSession.sessionUuid || localSession.id;
+    await reconcileSession(localSession, summary, onServer.has(sessionUuid));
+  }
+
+  return summary;
+}
+
 /**
  * Delete a session on the backend by its ID.
  */
@@ -519,29 +655,44 @@ export async function updateSettingsOnBackend(settings) {
  * Sync all current frontend settings to the backend.
  * Reads from localStorage and pushes to backend.
  */
+/** Read a stored boolean, tolerating anything that is not valid JSON. */
+function storedBool(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    return Boolean(JSON.parse(raw));
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Read a stored number. Any non-numeric value (an empty rate box persisted "")
+ * falls back, because the backend types these as floats and rejected the whole
+ * payload with a 422 — which surfaced to the user as "backend may be down"
+ * while every other setting silently failed to save too.
+ */
+function storedNumber(key, fallback) {
+  const raw = localStorage.getItem(key);
+  if (raw === null || raw === '') return fallback;
+  const parsed = parseFloat(typeof raw === 'string' ? raw.replace(/^"|"$/g, '') : raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export async function syncAllSettingsToBackend() {
   if (!isLoggedIn()) return null;
 
+  // Flat fields only. The backend's UpdateSettingsRequest has no customSettings
+  // field, so pydantic dropped that duplicate block on every request.
   const settings = {
-    showAmount: JSON.parse(localStorage.getItem('showAmount') || 'true'),
-    showStatsBeforeLaps: JSON.parse(localStorage.getItem('showStatsBeforeLaps') || 'false'),
-    breaksImpactAmount: JSON.parse(localStorage.getItem('breaksImpactAmount') || 'false'),
-    breaksImpactTime: JSON.parse(localStorage.getItem('breaksImpactTime') || 'false'),
-    minimalistMode: JSON.parse(localStorage.getItem('minimalistMode') || 'false'),
-    notificationEnabled: JSON.parse(localStorage.getItem('notificationEnabled') || 'true'),
-    notificationIntervalHours: JSON.parse(localStorage.getItem('notificationIntervalHours') || '2'),
-    hourlyAmount: JSON.parse(localStorage.getItem('hourlyAmount') || '450'),
-    // Also send as customSettings for the backend routes that use that field
-    customSettings: {
-      showAmount: JSON.parse(localStorage.getItem('showAmount') || 'true'),
-      showStatsBeforeLaps: JSON.parse(localStorage.getItem('showStatsBeforeLaps') || 'false'),
-      breaksImpactAmount: JSON.parse(localStorage.getItem('breaksImpactAmount') || 'false'),
-      breaksImpactTime: JSON.parse(localStorage.getItem('breaksImpactTime') || 'false'),
-      minimalistMode: JSON.parse(localStorage.getItem('minimalistMode') || 'false'),
-      notificationEnabled: JSON.parse(localStorage.getItem('notificationEnabled') || 'true'),
-      notificationIntervalHours: JSON.parse(localStorage.getItem('notificationIntervalHours') || '2'),
-      hourlyAmount: JSON.parse(localStorage.getItem('hourlyAmount') || '450'),
-    },
+    showAmount: storedBool('showAmount', true),
+    showStatsBeforeLaps: storedBool('showStatsBeforeLaps', false),
+    breaksImpactAmount: storedBool('breaksImpactAmount', false),
+    breaksImpactTime: storedBool('breaksImpactTime', false),
+    minimalistMode: storedBool('minimalistMode', false),
+    notificationEnabled: storedBool('notificationEnabled', true),
+    notificationIntervalHours: storedNumber('notificationIntervalHours', 2),
+    hourlyAmount: storedNumber('hourlyAmount', 450),
   };
 
   return await updateSettingsOnBackend(settings);
@@ -556,8 +707,12 @@ export async function loadSettingsFromBackend() {
   const result = await fetchSettings();
   if (!result) return null;
 
-  // Apply settings to localStorage — check both direct fields and customSettings
-  const settings = result.customSettings || result;
+  // Nothing has ever been saved for this account, so there is nothing to apply.
+  // Returning null here keeps a customised local setup intact instead of
+  // replacing it with server defaults and reporting success.
+  if (result.isDefault) return null;
+
+  const settings = result;
 
   if (settings.showAmount !== undefined) localStorage.setItem('showAmount', JSON.stringify(settings.showAmount));
   if (settings.showStatsBeforeLaps !== undefined) localStorage.setItem('showStatsBeforeLaps', JSON.stringify(settings.showStatsBeforeLaps));
@@ -672,7 +827,15 @@ export async function uploadLocalImagesToBackend(backendSessionId, backendLapId,
       const fingerprint = getLocalImageFingerprint(images[i]);
       if (hasUploadedLocalImage(localLapId, fingerprint)) continue;
 
-      const result = await uploadImageToBackend(backendSessionId, backendLapId, images[i], `lap_${localLapId}_img_${i}.jpg`);
+      // Name it after the image's own bytes, not its index. Indices shift when
+      // an image is deleted, which made a cloud copy impossible to match back
+      // to the local one it came from.
+      const result = await uploadImageToBackend(
+        backendSessionId,
+        backendLapId,
+        images[i],
+        uploadedImageName(localLapId, images[i]),
+      );
       if (result && result.imageId) {
         markLocalImageUploaded(localLapId, fingerprint);
       }
@@ -863,6 +1026,17 @@ export function markLapSyncedToLive(lapId) {
 }
 
 /**
+ * Forget that a lap was pushed, so the next sync sends it again.
+ * Needed when a lap's duration changes after it was already synced (splitting or
+ * merging): the backend upserts on lapUuid, but only laps absent from this list
+ * are sent at all, so without this the stale cloud row was never corrected.
+ */
+export function unmarkLapSyncedToLive(lapId) {
+  const ids = getLiveSyncedLapIds().filter((id) => id !== lapId);
+  localStorage.setItem(LIVE_SESSION_SYNCED_LAPS_KEY, JSON.stringify(ids));
+}
+
+/**
  * Clear live session tracking state.
  */
 export function clearLiveSessionState() {
@@ -946,14 +1120,9 @@ export async function addLapToLiveSession(lap) {
       });
     }
 
-    // Update session description with current lap count
-    const syncedCount = getLiveSyncedLapIds().length;
-    await authRequest(`/sessions/${backendSessionId}`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        description: `${syncedCount} laps synced (in progress)`,
-      }),
-    });
+    // No description PUT here on purpose. It used to write a running lap count
+    // into the description on every lap, which overwrote whatever the user had
+    // typed there. The lap count is already its own field on the session.
     return true;
   }
   return false;
@@ -1011,11 +1180,14 @@ export async function syncCurrentSessionToBackend(laps, options = {}) {
 
   const totals = calculateSessionTotals(laps);
 
+  // sessionName is only sent when the caller supplied one, and description is
+  // never sent from here: both used to be rewritten on every periodic sync,
+  // so an in-progress session's name and description kept changing underneath
+  // the user and diverged from the local copy.
   await authRequest(`/sessions/${backendSessionId}`, {
     method: 'PUT',
     body: JSON.stringify({
-      sessionName: options.sessionName,
-      description: `${laps.length} laps, ${totals.totalSeconds}s total (in progress)`,
+      ...(options.sessionName ? { sessionName: options.sessionName } : {}),
       totalDuration: totals.totalSeconds,
       totalAmount: totals.totalAmount,
       isCompleted: false,
@@ -1034,7 +1206,9 @@ export async function completeLiveSession(laps, localSession = null) {
   if (!isLoggedIn() || !laps || laps.length === 0) return null;
 
   const localSessionId = localSession?.sessionUuid || localSession?.id || null;
-  const sessionName = localSession?.sessionName || getDefaultSessionName(localSession?.createdAt);
+  const startedAt =
+    localSession?.startTime || sessionStartFromLaps(laps) || localSession?.createdAt;
+  const sessionName = localSession?.sessionName || getDefaultSessionName(startedAt);
   if (localSessionId) ensureLiveSessionUuid(localSessionId);
 
   // First sync all laps

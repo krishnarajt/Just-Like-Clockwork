@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { getSessions, deleteSession, clearAllSessions, updateSession as updateLocalSession } from '../utils/sessionStore';
 import {
   getSyncedSessionIds,
-  syncSessionToBackend,
+  reconcileOneSession,
   fetchBackendSessions,
   fetchSessionDetail,
   fetchSessionLaps,
@@ -12,9 +12,11 @@ import {
   updateLapOnBackend,
   uploadImageToBackend,
   unmarkSessionSynced,
+  reconcileAllSessions,
+  deleteImageFromBackend,
 } from '../utils/apiClient';
 import { AuthContext } from '../context/AuthContext';
-import { addImage, mergeLapImageSources, getImages, removeImage } from '../utils/imageStore';
+import { addImage, mergeLapImageSources, getImages, removeImage, findCloudCopy } from '../utils/imageStore';
 import { mergeLocalAndBackendSessions } from '../utils/sessionMerge';
 import { formatDuration, formatLocalDateTime } from '../utils/timeFormat';
 import {
@@ -151,11 +153,19 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
     reader.readAsDataURL(file);
   };
 
-  const handleRemoveImage = (lapId, index) => {
-    // Only remove from localStorage images, not backend presigned URLs
+  const handleRemoveImage = (lapId, index, backendImages = []) => {
     const localImgs = getImages(String(lapId));
     if (index < localImgs.length) {
-      removeImage(String(lapId), index);
+      const removed = removeImage(String(lapId), index);
+      // Delete the cloud copy too. Removing only the local one left the image in
+      // MinIO, so it reappeared from the backend on the next render.
+      const cloudCopy = removed ? findCloudCopy(lapId, removed, backendImages) : null;
+      const cloudImageId = cloudCopy?.imageId || cloudCopy?.image_id;
+      if (cloudImageId) {
+        deleteImageFromBackend(cloudImageId).catch(() => {
+          console.warn('[Sessions] Could not delete the cloud copy of the image');
+        });
+      }
     }
     setLocalLapImages((prev) => {
       const imgs = [...(prev[lapId] || [])];
@@ -302,7 +312,7 @@ function LapEditModal({ session, laps, onClose, onLapUpdate, onImageAdd }) {
                       />
                       <button
                         className="absolute -top-1.5 -right-1.5 btn btn-circle btn-xs btn-error opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={(e) => { e.stopPropagation(); handleRemoveImage(lapId, imgIdx); }}
+                        onClick={(e) => { e.stopPropagation(); handleRemoveImage(lapId, imgIdx, lap.images || []); }}
                       >
                         ×
                       </button>
@@ -348,6 +358,7 @@ export default function Sessions() {
   const [showConfirmClear, setShowConfirmClear] = useState(false);
   const [syncedIds, setSyncedIds] = useState([]);
   const [syncingId, setSyncingId] = useState(null);
+  const [syncReport, setSyncReport] = useState(null);
   const [backendLoading, setBackendLoading] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const [editingSession, setEditingSession] = useState(null); // session to edit laps
@@ -481,12 +492,13 @@ export default function Sessions() {
       setSyncingId(null);
       return;
     }
-    const result = await syncSessionToBackend(localSession);
-    if (result) {
-      setSyncedIds(getSyncedSessionIds());
-      await loadBackendSessions();
-    }
+    setSyncReport(null);
+    const summary = await reconcileOneSession(localSession);
+    setLocalSessions(getSessions());
+    setSyncedIds(getSyncedSessionIds());
+    await loadBackendSessions();
     setSyncingId(null);
+    setSyncReport(summary);
   };
 
   const loadSessionForExport = async (session) => {
@@ -525,15 +537,32 @@ export default function Sessions() {
   };
 
   const handleSyncAll = async () => {
-    if (!loggedIn) return;
-    for (const session of localSessions) {
-      await handleSyncSession(session);
-    }
+    if (!loggedIn || syncingId) return;
+    setSyncingId('all');
+    setSyncReport(null);
+    const summary = await reconcileAllSessions();
+    setLocalSessions(getSessions());
+    setSyncedIds(getSyncedSessionIds());
+    await loadBackendSessions();
+    setSyncingId(null);
+    setSyncReport(summary);
   };
 
   const handleDelete = async (session) => {
     if (session._backendId) {
-      await deleteBackendSession(session._backendId);
+      // deleteBackendSession returns null on failure. Dropping the row from
+      // state regardless made the session look deleted while it was still in
+      // the cloud, and it came back on the next refresh.
+      const deleted = await deleteBackendSession(session._backendId);
+      if (!deleted) {
+        setSyncReport({
+          uploaded: 0,
+          verified: 0,
+          keptLocally: 0,
+          problems: [`"${session.sessionName || session.id}" could not be deleted from the cloud.`],
+        });
+        return;
+      }
       setBackendSessions((prev) => prev.filter((s) => s.id !== session._backendId));
     }
     if (session._localId || session._source !== 'backend') {
@@ -640,6 +669,22 @@ export default function Sessions() {
             </div>
           )}
         </div>
+
+        {syncReport && (
+          <div className={`alert ${syncReport.problems.length ? 'alert-warning' : 'alert-success'} mb-3`}>
+            <div className="flex flex-col gap-1 text-sm">
+              <span className="font-semibold">
+                {syncReport.verified} session{syncReport.verified === 1 ? '' : 's'} confirmed in the cloud
+                {syncReport.uploaded > 0 && ` (${syncReport.uploaded} newly uploaded)`}
+                {syncReport.keptLocally > 0 && `, ${syncReport.keptLocally} kept on this device`}
+              </span>
+              {syncReport.problems.map((problem) => (
+                <span key={problem} className="opacity-80">{problem}</span>
+              ))}
+            </div>
+            <button className="btn btn-sm btn-ghost" onClick={() => setSyncReport(null)}>Dismiss</button>
+          </div>
+        )}
 
         {mergedSessions.length === 0 && !backendLoading ? (
           <div className="flex flex-col items-center justify-center min-h-[40vh] text-base-content/50">

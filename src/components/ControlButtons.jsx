@@ -40,7 +40,7 @@ export default function ControlButtons({
     addLap(newlap);
     return newlap.id;
   };
-  const { laps, addLap, resetLaps, getLapFromId, updateEndTime, flushActiveLapTime } = useContext(LapContext);
+  const { laps, addLap, resetLaps, getLapFromId, updateEndTime, flushActiveLapTime, getLapsSnapshot } = useContext(LapContext);
 
   // Sync current session to backend (manual sync button)
   const handleSyncCurrentSession = async () => {
@@ -155,9 +155,13 @@ export default function ControlButtons({
                   setStarted(true);
                   // setIsPlaying(true);
                 }
-                // Start periodic live backup if logged in
+                // Start periodic live backup if logged in.
+                // getLapsSnapshot, not `() => laps`: the latter captured this
+                // render's laps (empty when starting fresh), so the interval
+                // bailed on its length check forever and neither the 3-minute
+                // cloud sync nor the localStorage backup ever ran.
                 if (isLoggedIn()) {
-                  startLiveSessionSync(() => laps);
+                  startLiveSessionSync(getLapsSnapshot);
                 }
               }}
             />

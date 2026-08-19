@@ -12,8 +12,13 @@ const IMAGE_PREFIX = 'clockwork_img_';
 export function saveImages(lapId, images) {
   try {
     localStorage.setItem(IMAGE_PREFIX + lapId, JSON.stringify(images));
+    return true;
   } catch (e) {
+    // Returns false rather than only warning: base64 images are large enough to
+    // fill the ~5MB quota, and callers need to tell the user the attachment did
+    // not save instead of showing a thumbnail that vanishes on reload.
     console.warn('Failed to save images to localStorage (possibly full):', e);
+    return false;
   }
 }
 
@@ -74,20 +79,73 @@ export function dedupeImageSources(images = []) {
   });
 }
 
+/**
+ * A short, filename-safe id derived from an image's own bytes.
+ * Uploaded objects are named with it, which is what lets a cloud image be
+ * matched back to the local copy it came from. The previous naming used the
+ * image's position in the array (`_img_0`), and those positions shift whenever
+ * one is deleted, so a cloud copy could no longer be identified.
+ */
+export function localImageId(image) {
+  const fingerprint = getImageFingerprint(image);
+  if (!fingerprint) return '';
+  let hash = 5381;
+  for (let i = 0; i < fingerprint.length; i += 1) {
+    hash = ((hash << 5) + hash + fingerprint.charCodeAt(i)) | 0;
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+export function uploadedImageName(lapId, image) {
+  return `lap_${lapId}_${localImageId(image)}.jpg`;
+}
+
+/** True when this backend image is the cloud copy of one of `localImages`. */
+function isCloudCopyOfLocal(backendImage, lapId, localIds) {
+  const name = getImageName(backendImage);
+  if (!name) return false;
+  if ([...localIds].some((id) => id && name === `lap_${lapId}_${id}.jpg`)) return true;
+  // Legacy positional names from before content-addressed uploads. These cannot
+  // be matched to a specific local image, so treat any of them as a duplicate
+  // while local copies remain.
+  return localIds.size > 0 && name.startsWith(`lap_${lapId}_img_`);
+}
+
 export function mergeLapImageSources(lapId, backendImages = []) {
   const localImages = getImages(String(lapId));
   const backendSources = Array.isArray(backendImages) ? backendImages : [];
-  const uploadedLocalPrefix = `lap_${lapId}_img_`;
+  const localIds = new Set(localImages.map(localImageId).filter(Boolean));
 
   const filteredBackendImages = backendSources
-    .filter((image) => {
-      if (localImages.length === 0) return true;
-      return !getImageName(image).startsWith(uploadedLocalPrefix);
-    })
+    .filter((image) => !isCloudCopyOfLocal(image, lapId, localIds))
     .map(getImageUrl)
     .filter(Boolean);
 
   return dedupeImageSources([...localImages, ...filteredBackendImages]);
+}
+
+/**
+ * Find the backend image that is the cloud copy of a given local image, so the
+ * caller can delete both. Without this, deleting a thumbnail removed only the
+ * local copy and the cloud one reappeared on the next render.
+ */
+export function findCloudCopy(lapId, localImage, backendImages = []) {
+  const id = localImageId(localImage);
+  if (!id) return null;
+  const expected = `lap_${lapId}_${id}.jpg`;
+  return (Array.isArray(backendImages) ? backendImages : []).find(
+    (image) => getImageName(image) === expected,
+  ) || null;
+}
+
+/** Move a lap's attachments to a new lap id, used when splitting or merging. */
+export function moveImages(fromLapId, toLapId) {
+  if (String(fromLapId) === String(toLapId)) return;
+  const images = getImages(String(fromLapId));
+  if (images.length === 0) return;
+  const existing = getImages(String(toLapId));
+  saveImages(String(toLapId), dedupeImageSources([...existing, ...images]));
+  deleteImages(String(fromLapId));
 }
 
 /**
@@ -107,14 +165,15 @@ export function addImage(lapId, base64Image) {
   const images = getImages(lapId);
   const fingerprint = getImageFingerprint(base64Image);
   if (fingerprint && images.some((image) => getImageFingerprint(image) === fingerprint)) {
-    return;
+    return true;
   }
   images.push(base64Image);
-  saveImages(lapId, images);
+  const saved = saveImages(lapId, images);
   // Notify any listening components (e.g. ImageAttachment) that images changed
-  if (typeof window !== 'undefined') {
+  if (saved && typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('clockwork-images-changed', { detail: { lapId } }));
   }
+  return saved;
 }
 
 /**
@@ -124,8 +183,10 @@ export function addImage(lapId, base64Image) {
  */
 export function removeImage(lapId, index) {
   const images = getImages(lapId);
-  images.splice(index, 1);
+  const [removed] = images.splice(index, 1);
   saveImages(lapId, images);
+  // Returned so the caller can delete the cloud copy too.
+  return removed ?? null;
 }
 
 /**

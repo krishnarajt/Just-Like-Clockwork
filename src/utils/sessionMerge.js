@@ -1,3 +1,5 @@
+import { getDefaultSessionName } from './sessionStore.js';
+
 function numberOrZero(value) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : 0;
@@ -24,7 +26,9 @@ export function normalizeBackendSession(session) {
     lapCount,
     totalSeconds,
     totalAmount: numberOrZero(session.totalAmount ?? session.total_amount),
-    sessionName: session.sessionName || session.session_name || '',
+    // Same derivation as the local copy (name from the session's start time), so
+    // a session with no stored name reads identically whichever side it came from.
+    sessionName: session.sessionName || session.session_name || getDefaultSessionName(startedAt),
     description: session.description || '',
     isCompleted: session.isCompleted ?? session.is_completed ?? true,
     laps: Array.isArray(session.laps) ? session.laps : [],

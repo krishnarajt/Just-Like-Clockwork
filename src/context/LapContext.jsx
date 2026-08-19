@@ -10,6 +10,13 @@ import {
   partsFromSeconds,
   secondsFromParts,
 } from '../utils/timerMath';
+import { moveImages } from '../utils/imageStore';
+import {
+  deleteLapFromBackend,
+  getLiveBackendSessionId,
+  getLiveSyncedLapIds,
+  unmarkLapSyncedToLive,
+} from '../utils/apiClient';
 
 // Create the context
 export const LapContext = createContext();
@@ -48,6 +55,10 @@ const LapProvider = ({ children }) => {
   useEffect(() => {
     lapsRef.current = laps;
   }, [laps]);
+
+  // Identity-stable across renders, so an interval created once keeps seeing
+  // the current laps rather than the array from the render that started it.
+  const getLapsSnapshot = useCallback(() => lapsRef.current, []);
 
   const replaceLaps = useCallback((nextLapsOrUpdater) => {
     if (typeof nextLapsOrUpdater === 'function') {
@@ -370,16 +381,22 @@ const LapProvider = ({ children }) => {
 
     const halfMs = halfSeconds * 1000;
     const midMs = startMs + halfMs;
-    const midDateStr = new Date(midMs).toLocaleString();
+    // ISO, not toLocaleString(): a locale string carries no UTC offset and its
+    // day/month order depends on the browser locale, so the backend could not
+    // parse it unambiguously.
+    const midDateStr = new Date(midMs).toISOString();
 
-    // First half (same start, mid end)
+    // The first half keeps the original lap's id. Two things depend on that:
+    // the cloud row for this lap gets corrected in place rather than left
+    // behind alongside two new rows (which double-counted the time), and the
+    // lap's image attachments, keyed by lap id, stay attached.
     const lap1 = new WorkLap(
       lap.startTime,
       midDateStr,
       h1, m1, s1,
       lap.workDoneString,
       lap.HourlyAmount,
-      uuidv4()
+      lap.id
     );
     lap1.setIsBreakLap(lap.isBreakLap);
 
@@ -393,6 +410,10 @@ const LapProvider = ({ children }) => {
       uuidv4()
     );
     lap2.setIsBreakLap(lap.isBreakLap);
+
+    // The reused id is already marked as synced, and only unsynced laps are
+    // pushed, so without this the cloud copy would keep the pre-split duration.
+    unmarkLapSyncedToLive(lap.id);
 
     // Laps are stored newest-first, so the "first half" is chronologically earlier (goes after)
     // and the "second half" is chronologically later (goes before/at same index)
@@ -424,6 +445,16 @@ const LapProvider = ({ children }) => {
       return;
     }
 
+    // A break and a work lap cannot be combined into one meaningful lap: the
+    // result had to pick a single flag, and picking "not a break" quietly turned
+    // break time into billable time.
+    if (Boolean(lap1.isBreakLap) !== Boolean(lap2.isBreakLap)) {
+      import('../utils/toast.js').then(({ showToast }) => {
+        showToast('Cannot merge a break lap with a work lap.', 'warning');
+      });
+      return;
+    }
+
     // Determine which is chronologically earlier (higher index = older in newest-first array)
     const olderLap = idx1 > idx2 ? lap1 : lap2;
     const newerLap = idx1 > idx2 ? lap2 : lap1;
@@ -440,16 +471,38 @@ const LapProvider = ({ children }) => {
     const workParts = [olderLap.workDoneString, newerLap.workDoneString].filter(Boolean);
     const mergedWork = workParts.join('\n');
 
-    // Create merged lap with older's start and newer's end
+    // Blend the two rates by duration so the merged lap is worth exactly what
+    // the two were worth together. Taking the older lap's rate silently
+    // repriced the newer one whenever the rate had changed mid-session.
+    const olderSeconds = olderLap.getTotalTimeInSecondsRaw();
+    const newerSeconds = newerLap.getTotalTimeInSecondsRaw();
+    const combinedAmount =
+      Number(olderLap.HourlyAmount || 0) * olderSeconds +
+      Number(newerLap.HourlyAmount || 0) * newerSeconds;
+    const blendedRate = totalSeconds > 0 ? combinedAmount / totalSeconds : Number(olderLap.HourlyAmount || 0);
+
+    // Reuses the older lap's id, so its cloud row is corrected in place and its
+    // images stay attached. The newer lap's row has to be removed explicitly or
+    // its time would still be counted in the cloud total.
     const mergedLap = new WorkLap(
       olderLap.startTime,
       newerLap.endTime,
       h, m, s,
       mergedWork,
-      olderLap.HourlyAmount,
-      uuidv4()
+      blendedRate,
+      olderLap.id
     );
     mergedLap.setIsBreakLap(olderLap.isBreakLap && newerLap.isBreakLap);
+
+    moveImages(newerLap.id, olderLap.id);
+    unmarkLapSyncedToLive(olderLap.id);
+    const liveSessionId = getLiveBackendSessionId();
+    if (liveSessionId && getLiveSyncedLapIds().includes(newerLap.id)) {
+      deleteLapFromBackend(liveSessionId, newerLap.id).catch(() => {
+        console.warn('[Merge] Could not remove the merged-away lap from the cloud');
+      });
+    }
+    unmarkLapSyncedToLive(newerLap.id);
 
     // Remove both and insert merged at the newer position
     const newLaps = prevLaps.filter((_, i) => i !== olderIdx && i !== newerIdx);
@@ -542,6 +595,11 @@ const LapProvider = ({ children }) => {
     <LapContext.Provider
       value={{
         laps,
+        // Stable getter backed by lapsRef. Callers that hand a lap-getter to a
+        // long-lived interval must use this: `() => laps` closes over the array
+        // from one render, so the interval would keep reading that first
+        // snapshot (usually empty) for the whole session.
+        getLapsSnapshot,
         breaksImpactAmount,
         breaksImpactTime,
         setBreaksImpactAmount,

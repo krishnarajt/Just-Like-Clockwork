@@ -37,8 +37,14 @@ export default function Settings() {
   }, [amount]);
 
   const handleAmountChange = (e) => {
+    // The box can be mid-edit or empty, so keep the raw text for display but
+    // only persist a real number. Persisting "" made every lap earn 0 and made
+    // the whole cloud save fail validation, reported as "backend may be down".
     setLocalAmount(e.target.value);
-    updateAmount(e.target.value);
+    const num = parseFloat(e.target.value);
+    if (Number.isFinite(num) && num >= 0) {
+      updateAmount(num);
+    }
   };
 
   const [localInterval, setLocalInterval] = useState(notificationIntervalHours);

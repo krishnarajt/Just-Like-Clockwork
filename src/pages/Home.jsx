@@ -108,12 +108,15 @@ const Home = () => {
     try {
       // Convert backend laps to WorkLap objects (all completed/paused)
       const restoredLaps = restoredSession.laps.map((lap) => {
-        const startTime = lap.startedAt || lap.started_at || lap.startTime || new Date().toLocaleString();
-        const endTime = lap.endedAt || lap.ended_at || lap.endTime || new Date().toLocaleString();
+        const startTime = lap.startedAt ?? lap.started_at ?? lap.startTime ?? new Date().toISOString();
+        // A backend lap with no end time is still running, which this app
+        // represents as the number 0. Falling back to "now" here turned every
+        // restored in-progress lap into a finished one.
+        const endTime = lap.endedAt ?? lap.ended_at ?? lap.endTime ?? 0;
         const duration = lap.duration || 0;
-        const hours = lap.hours || Math.floor(duration / 3600);
-        const minutes = lap.minutes || Math.floor((duration % 3600) / 60);
-        const seconds = lap.seconds || Math.round(duration % 60);
+        const hours = lap.currentHours ?? lap.current_hours ?? Math.floor(duration / 3600);
+        const minutes = lap.currentMinutes ?? lap.current_minutes ?? Math.floor((duration % 3600) / 60);
+        const seconds = lap.currentSeconds ?? lap.current_seconds ?? Math.round(duration % 60);
         const workDone = lap.lapName || lap.lap_name || lap.workDoneString || '';
         const hourlyAmount = lap.hourlyAmount || lap.hourly_amount || lap.HourlyAmount || 0;
 

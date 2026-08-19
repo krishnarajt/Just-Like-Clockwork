@@ -3,11 +3,23 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { formatSessionNameDateTime } from './timeFormat.js';
+import { deleteImages } from './imageStore.js';
 
 const SESSIONS_KEY = 'clockwork_sessions';
 
-export function getDefaultSessionName(createdAt = new Date().toISOString()) {
-  return `Session ${formatSessionNameDateTime(createdAt)}`;
+export function getDefaultSessionName(startedAt = new Date().toISOString()) {
+  return `Session ${formatSessionNameDateTime(startedAt)}`;
+}
+
+/**
+ * The start time of a session, taken from its oldest lap.
+ * Laps are stored newest-first, so the oldest is the last element.
+ * This is the one value a session's default name is derived from, on both the
+ * client and the backend, so the two always agree.
+ */
+export function sessionStartFromLaps(laps = []) {
+  if (!Array.isArray(laps) || laps.length === 0) return null;
+  return laps[laps.length - 1]?.startTime || null;
 }
 
 export function serializeLaps(laps = []) {
@@ -57,15 +69,20 @@ function normalizeStoredSession(session) {
   const totals = calculateSessionTotals(laps);
   const createdAt = session.createdAt || new Date().toISOString();
   const id = session.id || session.sessionUuid || uuidv4();
+  const startTime = session.startTime || sessionStartFromLaps(laps) || createdAt;
 
   return {
     ...session,
     id,
     sessionUuid: session.sessionUuid || id,
     createdAt,
-    sessionName: session.sessionName || getDefaultSessionName(createdAt),
+    // Named after the session's start, never its createdAt. createdAt is stamped
+    // when the session is saved (i.e. when the timer stops), so naming from it
+    // produced a different name than the backend's, which derives from the
+    // first lap's start time.
+    sessionName: session.sessionName || getDefaultSessionName(startTime),
     description: session.description || '',
-    startTime: session.startTime || (laps.length > 0 ? laps[laps.length - 1].startTime : createdAt),
+    startTime,
     endTime: session.endTime || null,
     lapCount: Number(session.lapCount ?? laps.length),
     totalSeconds: Number(session.totalSeconds ?? totals.totalSeconds),
@@ -109,17 +126,20 @@ export function saveSession(laps, options = {}) {
   const sessionId = options.id || options.sessionUuid || uuidv4();
   const existing = sessions.find((s) => s.id === sessionId || s.sessionUuid === sessionId);
 
+  const startTime =
+    options.startTime ||
+    existing?.startTime ||
+    sessionStartFromLaps(serializedLaps) ||
+    createdAt;
+
   const session = normalizeStoredSession({
     ...(existing || {}),
     id: sessionId,
     sessionUuid: sessionId,
     createdAt: existing?.createdAt || createdAt,
-    sessionName: options.sessionName || existing?.sessionName || getDefaultSessionName(createdAt),
+    sessionName: options.sessionName || existing?.sessionName || getDefaultSessionName(startTime),
     description: options.description ?? existing?.description ?? '',
-    startTime:
-      options.startTime ||
-      existing?.startTime ||
-      (serializedLaps.length > 0 ? serializedLaps[serializedLaps.length - 1].startTime : createdAt),
+    startTime,
     endTime: options.endTime || new Date().toISOString(),
     lapCount: serializedLaps.length,
     totalSeconds: totals.totalSeconds,
@@ -159,15 +179,31 @@ export function updateSession(sessionId, updates) {
  * @param {string} sessionId
  */
 export function deleteSession(sessionId) {
-  const filtered = getSessions().filter((s) => s.id !== sessionId && s.sessionUuid !== sessionId);
+  const sessions = getSessions();
+  const removed = sessions.filter((s) => s.id === sessionId || s.sessionUuid === sessionId);
+  const filtered = sessions.filter((s) => s.id !== sessionId && s.sessionUuid !== sessionId);
   writeSessions(filtered);
+  // Attachments are keyed by lap id and live in the same localStorage quota as
+  // everything else. Nothing used to remove them, so they accumulated until the
+  // quota filled and further writes started failing.
+  removed.forEach((session) => {
+    (session.laps || []).forEach((lap) => {
+      if (lap?.id) deleteImages(String(lap.id));
+    });
+  });
 }
 
 /**
  * Clear all sessions.
  */
 export function clearAllSessions() {
+  const sessions = getSessions();
   localStorage.removeItem(SESSIONS_KEY);
+  sessions.forEach((session) => {
+    (session.laps || []).forEach((lap) => {
+      if (lap?.id) deleteImages(String(lap.id));
+    });
+  });
 }
 
 /**
